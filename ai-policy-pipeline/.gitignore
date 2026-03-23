@@ -1,0 +1,6 @@
+venv/
+data/
+crawl.log
+__pycache__/
+*.pyc
+.env
