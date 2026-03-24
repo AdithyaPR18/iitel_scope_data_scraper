@@ -51,25 +51,25 @@ def crawl_source(source: dict) -> list[dict]:
 
         if page is None:
             continue
+
+        # enqueue links FIRST before we potentially delete them
+        for link in page.get("links", []):
+            if link not in visited:
+                queue.append(link)
+
+        # now decide whether to store this page
         if len(page["text"]) < MIN_TEXT_LENGTH:
             logger.debug("Too short, skipping: %s", url)
-            # still enqueue its links so we don't miss deeper pages
-        else:
-            if _is_relevant(page["text"], keywords):
-                page["category"] = source["category"]
-                page["label"] = label
-                # don't store the full link list in the DB — wastes space
-                del page["links"]
-                results.append(page)
-                logger.info("  ✓ [%d/%d] %s", len(results), MAX_PAGES_PER_DOMAIN, url)
-            else:
-                logger.debug("  ✗ no keyword match: %s", url)
+            continue
 
-        # enqueue discovered links for BFS
-        if page and "links" in page:
-            for link in page["links"]:
-                if link not in visited:
-                    queue.append(link)
+        if _is_relevant(page["text"], keywords):
+            page["category"] = source["category"]
+            page["label"] = label
+            del page["links"]  # don't bloat the DB with link lists
+            results.append(page)
+            logger.info("  ✓ [%d/%d] %s", len(results), MAX_PAGES_PER_DOMAIN, url)
+        else:
+            logger.debug("  ✗ no keyword match: %s", url)
 
     logger.info("  → %d pages stored for [%s]", len(results), label)
     return results
