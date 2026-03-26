@@ -27,6 +27,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
+from supabase_client import supabase
 
 from config import OUTPUT_DIR, OUTPUT_FILE
 
@@ -80,3 +81,26 @@ def upsert_pages(new_pages: list[dict]) -> None:
 
     logger.info("  DB: +%d new, ~%d updated", added, updated)
     save_db(db)
+    push_to_supabase(new_pages)
+
+
+def push_to_supabase(pages):
+    cleaned = []
+
+    for p in pages:
+        cleaned.append({
+            "title": p.get("title"),
+            "url": p.get("url"),
+            "source": p.get("label", "gov"),
+            "published_at": p.get("date"),
+            "content": p.get("text")
+        })
+
+    print("🔥 pushing to supabase:", len(cleaned))
+
+    for row in cleaned:
+        try:
+            response = supabase.table("articles").insert(row).execute()
+            print("✅ inserted:", row["url"])
+        except Exception as e:
+            print("❌ failed:", e)
