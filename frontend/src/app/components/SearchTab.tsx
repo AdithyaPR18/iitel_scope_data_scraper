@@ -4,6 +4,25 @@ import { searchPolicies, type SearchResult } from '@/lib/api';
 
 type FilterType = 'all' | 'title' | 'content';
 
+function highlight(text: string, query: string) {
+  if (!query.trim()) return <>{text}</>;
+  const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const parts = text.split(new RegExp(`(${escaped})`, 'gi'));
+  return (
+    <>
+      {parts.map((part, i) =>
+        part.toLowerCase() === query.toLowerCase() ? (
+          <mark key={i} className="bg-yellow-200 text-gray-900 rounded-sm px-0.5 not-italic">
+            {part}
+          </mark>
+        ) : (
+          part
+        )
+      )}
+    </>
+  );
+}
+
 export function SearchTab() {
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState<FilterType>('all');
@@ -12,12 +31,14 @@ export function SearchTab() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [searched, setSearched] = useState(false);
+  const [lastQuery, setLastQuery] = useState('');
 
   const handleSearch = async () => {
     if (!query.trim()) return;
     setLoading(true);
     setError(null);
     setSearched(true);
+    setLastQuery(query.trim());
     try {
       const res = await searchPolicies(query.trim(), filter);
       setResults(res.data);
@@ -76,7 +97,8 @@ export function SearchTab() {
           <div className="mt-3 text-sm text-gray-600">
             {error ? null : (
               <span>
-                Found <strong>{total}</strong> {total === 1 ? 'article' : 'articles'} matching "{query}"
+                Found <strong>{total}</strong> {total === 1 ? 'article' : 'articles'} matching "
+                {lastQuery}"
               </span>
             )}
           </div>
@@ -114,48 +136,53 @@ export function SearchTab() {
           </div>
         )}
 
-        {!loading && results.map((result) => (
-          <div
-            key={result.id}
-            className="border border-gray-200 rounded-lg p-5 bg-white hover:shadow-md transition-shadow"
-          >
-            <div className="flex items-start gap-3">
-              <div className="p-2 bg-[#C9A961]/10 rounded-lg">
-                <FileText className="w-5 h-5 text-[#C9A961]" />
-              </div>
-
-              <div className="flex-1 min-w-0">
-                <div className="flex items-start justify-between gap-4 mb-2">
-                  <h3 className="font-semibold text-lg text-gray-900">{result.title}</h3>
-                  {result.published_at && (
-                    <span className="text-xs text-gray-500 whitespace-nowrap">
-                      {new Date(result.published_at).toLocaleDateString()}
-                    </span>
-                  )}
+        {!loading &&
+          results.map((result) => (
+            <div
+              key={result.id}
+              className="border border-gray-200 rounded-lg p-5 bg-white hover:shadow-md transition-shadow"
+            >
+              <div className="flex items-start gap-3">
+                <div className="p-2 bg-[#C9A961]/10 rounded-lg flex-shrink-0">
+                  <FileText className="w-5 h-5 text-[#C9A961]" />
                 </div>
 
-                <div className="flex items-center gap-3 mb-3 text-sm text-gray-600">
-                  <div className="flex items-center gap-1">
-                    <ExternalLink className="w-4 h-4" />
-                    <span>{result.source}</span>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-start justify-between gap-4 mb-2">
+                    <h3 className="font-semibold text-lg text-gray-900">
+                      {highlight(result.title, lastQuery)}
+                    </h3>
+                    {result.published_at && (
+                      <span className="text-xs text-gray-500 whitespace-nowrap">
+                        {new Date(result.published_at).toLocaleDateString()}
+                      </span>
+                    )}
                   </div>
-                  {result.url && (
-                    <a
-                      href={result.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-xs text-[#C9A961] hover:underline truncate max-w-xs"
-                    >
-                      {result.url}
-                    </a>
-                  )}
-                </div>
 
-                <p className="text-gray-700 leading-relaxed text-sm">{result.snippet}</p>
+                  <div className="flex items-center gap-3 mb-3 text-sm text-gray-600">
+                    <div className="flex items-center gap-1">
+                      <ExternalLink className="w-4 h-4" />
+                      <span>{result.source}</span>
+                    </div>
+                    {result.url && (
+                      <a
+                        href={result.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-[#C9A961] hover:underline truncate max-w-xs"
+                      >
+                        {result.url}
+                      </a>
+                    )}
+                  </div>
+
+                  <p className="text-gray-700 leading-relaxed text-sm">
+                    {highlight(result.snippet, lastQuery)}
+                  </p>
+                </div>
               </div>
             </div>
-          </div>
-        ))}
+          ))}
       </div>
     </div>
   );

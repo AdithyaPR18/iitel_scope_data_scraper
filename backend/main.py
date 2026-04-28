@@ -36,6 +36,29 @@ SYSTEM_PROMPT = (
 )
 
 
+def _fix_encoding(text: str | None) -> str:
+    """Repair mojibake: UTF-8 bytes that were stored decoded as Latin-1."""
+    if not text:
+        return text or ""
+    try:
+        return text.encode("latin-1").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return text
+
+
+def _strip_markdown(text: str) -> str:
+    """Convert markdown to clean plain text for previews and snippets."""
+    text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\*{1,3}(.*?)\*{1,3}', r'\1', text)
+    text = re.sub(r'_{1,3}(.*?)_{1,3}', r'\1', text)
+    text = re.sub(r'^\s*[*\-+]\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s*\d+[.)]\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
+    text = re.sub(r'`([^`]+)`', r'\1', text)
+    text = re.sub(r'\s+', ' ', text)
+    return text.strip()
+
+
 def _escape_like(q: str) -> str:
     """Escape LIKE wildcards in user input to prevent pattern injection."""
     return q.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
@@ -105,10 +128,10 @@ def list_policies(page: int = 1, limit: int = Query(20, le=100)):
     )
     data = []
     for row in rows.data:
-        content = row.get("content") or ""
+        content = _strip_markdown(_fix_encoding(row.get("content") or ""))
         data.append({
             "id": row["id"],
-            "title": row["title"],
+            "title": _fix_encoding(row["title"]),
             "url": row["url"],
             "source": row["source"],
             "published_at": row["published_at"],
@@ -131,7 +154,12 @@ def get_policy(article_id: str):
         .single()
         .execute()
     )
-    return row.data
+    d = row.data
+    return {
+        **d,
+        "title": _fix_encoding(d.get("title")),
+        "content": _fix_encoding(d.get("content")),
+    }
 
 
 # ── 2. Search ─────────────────────────────────────────────────────────────────
@@ -154,7 +182,7 @@ def search(
 
     results = []
     for row in rows.data:
-        content = row.get("content") or ""
+        content = _strip_markdown(_fix_encoding(row.get("content") or ""))
         idx = content.lower().find(q.lower())
         if idx >= 0:
             start = max(0, idx - 80)
@@ -165,7 +193,7 @@ def search(
 
         results.append({
             "id": row["id"],
-            "title": row["title"],
+            "title": _fix_encoding(row["title"]),
             "url": row["url"],
             "source": row["source"],
             "published_at": row["published_at"],
@@ -186,7 +214,7 @@ def chat(req: ChatRequest):
     articles = _fetch_context(req.question)
 
     context = "\n\n---\n\n".join(
-        f"Source: {a['source']}\nTitle: {a['title']}\nURL: {a['url']}\n\n{(a.get('content') or '')[:3000]}"
+        f"Source: {a['source']}\nTitle: {a['title']}\nURL: {a['url']}\n\n{_fix_encoding(a.get('content') or '')[:3000]}"
         for a in articles
     )
 

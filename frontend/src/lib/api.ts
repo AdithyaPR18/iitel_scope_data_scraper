@@ -43,6 +43,21 @@ export interface ChatResponse {
   sources: ChatSource[];
 }
 
+export interface ArticleDetail {
+  id: string;
+  title: string;
+  url: string | null;
+  source: string | null;
+  published_at: string | null;
+  content: string | null;
+}
+
+export async function fetchPolicy(id: string): Promise<ArticleDetail> {
+  const res = await fetch(`${API_BASE}/policies/${id}`);
+  if (!res.ok) throw new Error('Failed to fetch policy');
+  return res.json();
+}
+
 export async function fetchPolicies(page = 1, limit = 20): Promise<PoliciesResponse> {
   const res = await fetch(`${API_BASE}/policies?page=${page}&limit=${limit}`);
   if (!res.ok) throw new Error('Failed to fetch policies');
