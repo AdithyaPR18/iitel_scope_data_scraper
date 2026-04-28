@@ -8,6 +8,8 @@ import anthropic
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+from langdetect import detect, LangDetectException
+from deep_translator import GoogleTranslator
 
 from db import supabase
 
@@ -36,6 +38,33 @@ SYSTEM_PROMPT = (
 )
 
 
+def _detect_language(title: str, content: str = "") -> str:
+    """Detect language from title first (most reliable), fall back to content."""
+    for sample in (title, content[:300]):
+        if not sample or len(sample.strip()) < 15:
+            continue
+        try:
+            lang = detect(sample)
+            if lang != "en":
+                return lang
+        except LangDetectException:
+            continue
+    # Re-check title alone in case both returned 'en'
+    try:
+        return detect(title) if len(title.strip()) >= 15 else "en"
+    except LangDetectException:
+        return "en"
+
+
+def _is_garbled(text: str) -> bool:
+    """True when content has too many broken encoding bytes to be readable."""
+    if not text or len(text) < 20:
+        return False
+    sample = text[:300]
+    non_ascii = sum(1 for c in sample if 0x7F < ord(c) < 0x0100)
+    return non_ascii / len(sample) > 0.35
+
+
 def _fix_encoding(text: str | None) -> str:
     """Repair mojibake: UTF-8 bytes that were stored decoded as Latin-1."""
     if not text:
@@ -46,8 +75,16 @@ def _fix_encoding(text: str | None) -> str:
         return text
 
 
-def _strip_markdown(text: str) -> str:
-    """Convert markdown to clean plain text for previews and snippets."""
+def _clean_content(text: str) -> str:
+    """Normalize content from any source into readable plain text for previews."""
+    # Strip HTML tags (catches sources that store raw HTML)
+    text = re.sub(r'<[^>]+>', ' ', text)
+    # Decode common HTML entities
+    text = (text
+        .replace('&amp;', '&').replace('&lt;', '<').replace('&gt;', '>')
+        .replace('&nbsp;', ' ').replace('&quot;', '"').replace('&#39;', "'")
+    )
+    # Strip markdown headings, bold, italic, bullets, links, inline code
     text = re.sub(r'^#{1,6}\s+', '', text, flags=re.MULTILINE)
     text = re.sub(r'\*{1,3}(.*?)\*{1,3}', r'\1', text)
     text = re.sub(r'_{1,3}(.*?)_{1,3}', r'\1', text)
@@ -55,6 +92,7 @@ def _strip_markdown(text: str) -> str:
     text = re.sub(r'^\s*\d+[.)]\s+', '', text, flags=re.MULTILINE)
     text = re.sub(r'\[([^\]]+)\]\([^)]+\)', r'\1', text)
     text = re.sub(r'`([^`]+)`', r'\1', text)
+    # Collapse whitespace
     text = re.sub(r'\s+', ' ', text)
     return text.strip()
 
@@ -128,14 +166,17 @@ def list_policies(page: int = 1, limit: int = Query(20, le=100)):
     )
     data = []
     for row in rows.data:
-        content = _strip_markdown(_fix_encoding(row.get("content") or ""))
+        title = _fix_encoding(row.get("title") or "")
+        content = _clean_content(_fix_encoding(row.get("content") or ""))
+        preview = "" if _is_garbled(content) else content[:300] + ("…" if len(content) > 300 else "")
         data.append({
             "id": row["id"],
-            "title": _fix_encoding(row["title"]),
+            "title": title,
             "url": row["url"],
             "source": row["source"],
             "published_at": row["published_at"],
-            "preview": content[:300] + ("…" if len(content) > 300 else ""),
+            "language": _detect_language(title, content),
+            "preview": preview,
         })
     return {
         "data": data,
@@ -155,10 +196,15 @@ def get_policy(article_id: str):
         .execute()
     )
     d = row.data
+    title = _fix_encoding(d.get("title") or "")
+    fixed_content = _fix_encoding(d.get("content") or "")
+    clean = _clean_content(fixed_content)
     return {
         **d,
-        "title": _fix_encoding(d.get("title")),
-        "content": _fix_encoding(d.get("content")),
+        "title": title,
+        "content": None if _is_garbled(clean) else fixed_content,
+        "language": _detect_language(title, clean),
+        "garbled": _is_garbled(clean),
     }
 
 
@@ -182,7 +228,7 @@ def search(
 
     results = []
     for row in rows.data:
-        content = _strip_markdown(_fix_encoding(row.get("content") or ""))
+        content = _clean_content(_fix_encoding(row.get("content") or ""))
         idx = content.lower().find(q.lower())
         if idx >= 0:
             start = max(0, idx - 80)
@@ -236,3 +282,20 @@ def chat(req: ChatRequest):
             for a in articles
         ],
     }
+
+
+# ── 4. Translate ──────────────────────────────────────────────────────────────
+
+class TranslateRequest(BaseModel):
+    text: str
+
+
+@app.post("/translate")
+def translate_text(req: TranslateRequest):
+    if not req.text.strip():
+        return {"translated": req.text}
+    try:
+        translated = GoogleTranslator(source="auto", target="en").translate(req.text[:5000])
+        return {"translated": translated or req.text}
+    except Exception:
+        return {"translated": req.text, "error": "Translation unavailable. Try again later."}

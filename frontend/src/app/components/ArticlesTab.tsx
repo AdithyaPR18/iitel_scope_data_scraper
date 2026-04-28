@@ -1,7 +1,14 @@
 import { useEffect, useState } from 'react';
-import { FileText, ExternalLink, ChevronLeft, ChevronRight, ArrowLeft } from 'lucide-react';
+import { FileText, ExternalLink, ChevronLeft, ChevronRight, ArrowLeft, Globe } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { fetchPolicies, fetchPolicy, type Article, type ArticleDetail } from '@/lib/api';
+import { fetchPolicies, fetchPolicy, translateText, type Article, type ArticleDetail } from '@/lib/api';
+
+const LANG_NAMES: Record<string, string> = {
+  fr: 'French', de: 'German', es: 'Spanish', it: 'Italian', pt: 'Portuguese',
+  nl: 'Dutch', pl: 'Polish', ru: 'Russian', zh: 'Chinese', ja: 'Japanese',
+  ko: 'Korean', ar: 'Arabic', hi: 'Hindi', tr: 'Turkish', sv: 'Swedish',
+  da: 'Danish', fi: 'Finnish', no: 'Norwegian', cs: 'Czech', ro: 'Romanian',
+};
 
 
 const PAGE_SIZE = 20;
@@ -15,6 +22,13 @@ export function ArticlesTab() {
 
   const [selected, setSelected] = useState<ArticleDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
+
+  // translation state: map of article id → translated preview text
+  const [translatedPreviews, setTranslatedPreviews] = useState<Record<string, string>>({});
+  const [translatingId, setTranslatingId] = useState<string | null>(null);
+  // detail view translation
+  const [translatedContent, setTranslatedContent] = useState<string | null>(null);
+  const [translatingDetail, setTranslatingDetail] = useState(false);
 
   useEffect(() => {
     setLoading(true);
@@ -30,6 +44,7 @@ export function ArticlesTab() {
 
   const openArticle = async (id: string) => {
     setDetailLoading(true);
+    setTranslatedContent(null);
     try {
       const detail = await fetchPolicy(id);
       setSelected(detail);
@@ -37,6 +52,33 @@ export function ArticlesTab() {
       setError('Failed to load article. Please try again.');
     } finally {
       setDetailLoading(false);
+    }
+  };
+
+  const translatePreview = async (article: Article) => {
+    if (translatedPreviews[article.id]) {
+      // toggle off
+      setTranslatedPreviews((prev) => { const next = { ...prev }; delete next[article.id]; return next; });
+      return;
+    }
+    setTranslatingId(article.id);
+    try {
+      const res = await translateText(article.preview);
+      setTranslatedPreviews((prev) => ({ ...prev, [article.id]: res.translated }));
+    } finally {
+      setTranslatingId(null);
+    }
+  };
+
+  const translateDetail = async () => {
+    if (translatedContent) { setTranslatedContent(null); return; }
+    if (!selected?.content) return;
+    setTranslatingDetail(true);
+    try {
+      const res = await translateText(selected.content);
+      setTranslatedContent(res.translated);
+    } finally {
+      setTranslatingDetail(false);
     }
   };
 
@@ -67,6 +109,11 @@ export function ArticlesTab() {
             {selected.published_at && (
               <span>{new Date(selected.published_at).toLocaleDateString()}</span>
             )}
+            {selected.language && selected.language !== 'en' && (
+              <span className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-xs font-medium uppercase">
+                {LANG_NAMES[selected.language] ?? selected.language}
+              </span>
+            )}
             {selected.url && (
               <a
                 href={selected.url}
@@ -77,6 +124,16 @@ export function ArticlesTab() {
                 <ExternalLink className="w-4 h-4" />
                 View original source
               </a>
+            )}
+            {selected.language && selected.language !== 'en' && !selected.garbled && (
+              <button
+                onClick={translateDetail}
+                disabled={translatingDetail}
+                className="flex items-center gap-1.5 px-3 py-1 border border-[#C9A961] text-[#C9A961] rounded-lg text-xs hover:bg-[#C9A961]/10 disabled:opacity-50 transition-colors"
+              >
+                <Globe className="w-3.5 h-3.5" />
+                {translatingDetail ? 'Translating…' : translatedContent ? 'Show original' : 'Translate to English'}
+              </button>
             )}
           </div>
 
@@ -94,10 +151,25 @@ export function ArticlesTab() {
             [&_blockquote]:border-l-4 [&_blockquote]:border-gray-300 [&_blockquote]:pl-4 [&_blockquote]:italic [&_blockquote]:text-gray-600
             [&_hr]:border-gray-200 [&_hr]:my-4
           ">
-            {selected.content ? (
-              <ReactMarkdown>{selected.content}</ReactMarkdown>
+            {selected.garbled || !selected.content ? (
+              <div className="text-center py-10 space-y-3">
+                <p className="text-gray-500">
+                  This article's content could not be recovered — it was stored with broken character encoding.
+                </p>
+                {selected.url && (
+                  <a
+                    href={selected.url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-2 px-4 py-2 bg-[#C9A961] text-white rounded-lg text-sm hover:bg-[#B8984F] transition-colors"
+                  >
+                    <ExternalLink className="w-4 h-4" />
+                    Read on original source
+                  </a>
+                )}
+              </div>
             ) : (
-              <p className="text-gray-400 italic">No content available for this article.</p>
+              <ReactMarkdown>{translatedContent ?? selected.content}</ReactMarkdown>
             )}
           </div>
         </div>
@@ -158,15 +230,18 @@ export function ArticlesTab() {
                     )}
                   </div>
 
-                  <div className="flex items-center gap-3 mb-3">
+                  <div className="flex items-center gap-3 mb-3 flex-wrap">
                     <div className="flex items-center gap-1.5 text-sm text-gray-600">
                       <ExternalLink className="w-4 h-4" />
                       <span>{article.source}</span>
                     </div>
+                    {article.language && article.language !== 'en' && (
+                      <span className="px-2 py-0.5 bg-blue-50 text-blue-700 rounded text-xs font-medium uppercase">
+                        {LANG_NAMES[article.language] ?? article.language}
+                      </span>
+                    )}
                     {article.url && (
-                      <span
-                        onClick={(e) => e.stopPropagation()}
-                      >
+                      <span onClick={(e) => e.stopPropagation()}>
                         <a
                           href={article.url}
                           target="_blank"
@@ -179,8 +254,33 @@ export function ArticlesTab() {
                     )}
                   </div>
 
-                  <p className="text-gray-700 leading-relaxed">{article.preview}</p>
-                  <p className="text-xs text-[#C9A961] mt-2">Click to read full article →</p>
+                  {article.preview ? (
+                    <p className="text-gray-700 leading-relaxed">
+                      {translatedPreviews[article.id] ?? article.preview}
+                    </p>
+                  ) : (
+                    <p className="text-sm text-gray-400 italic">
+                      Preview unavailable — content encoding could not be recovered.
+                    </p>
+                  )}
+
+                  <div className="flex items-center justify-between mt-2">
+                    <p className="text-xs text-[#C9A961]">Click to read full article →</p>
+                    {article.preview && article.language && article.language !== 'en' && (
+                      <button
+                        onClick={(e) => { e.stopPropagation(); translatePreview(article); }}
+                        disabled={translatingId === article.id}
+                        className="flex items-center gap-1 text-xs text-gray-500 hover:text-[#C9A961] disabled:opacity-50 transition-colors"
+                      >
+                        <Globe className="w-3 h-3" />
+                        {translatingId === article.id
+                          ? 'Translating…'
+                          : translatedPreviews[article.id]
+                          ? 'Show original'
+                          : 'Translate preview'}
+                      </button>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>

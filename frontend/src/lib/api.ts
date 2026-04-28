@@ -6,6 +6,7 @@ export interface Article {
   url: string | null;
   source: string | null;
   published_at: string | null;
+  language: string;
   preview: string;
 }
 
@@ -49,7 +50,9 @@ export interface ArticleDetail {
   url: string | null;
   source: string | null;
   published_at: string | null;
+  language: string;
   content: string | null;
+  garbled: boolean;
 }
 
 export async function fetchPolicy(id: string): Promise<ArticleDetail> {
@@ -72,6 +75,16 @@ export async function searchPolicies(
   const params = new URLSearchParams({ q, filter, limit: String(limit) });
   const res = await fetch(`${API_BASE}/search?${params}`);
   if (!res.ok) throw new Error('Failed to search policies');
+  return res.json();
+}
+
+export async function translateText(text: string): Promise<{ translated: string; error?: string }> {
+  const res = await fetch(`${API_BASE}/translate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  });
+  if (!res.ok) throw new Error('Translation request failed');
   return res.json();
 }
 
