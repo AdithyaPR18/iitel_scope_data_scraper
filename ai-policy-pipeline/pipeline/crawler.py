@@ -1,15 +1,15 @@
 """
 crawler.py — BFS crawler for a single source.
 
-Starts at source["url"], follows same-domain links up to MAX_PAGES_PER_DOMAIN,
-optionally filters pages by keyword relevance, and returns a list of page dicts.
+Starts at source["url"], follows same-domain links up to MAX_PAGES_PER_DOMAIN
+pages and MAX_DEPTH hops from the seed URL, optionally filtering by keywords.
 """
 
 import logging
 import time
 from collections import deque
 
-from config import MAX_PAGES_PER_DOMAIN, CRAWL_DELAY, MIN_TEXT_LENGTH
+from config import MAX_PAGES_PER_DOMAIN, MAX_DEPTH, CRAWL_DELAY, MIN_TEXT_LENGTH
 from scrapers import fetch_page
 
 logger = logging.getLogger(__name__)
@@ -35,13 +35,17 @@ def crawl_source(source: dict) -> list[dict]:
     keywords = source.get("keywords", [])
 
     visited: set[str] = set()
-    queue: deque[str] = deque([seed])
+    # Queue entries are (url, depth)
+    queue: deque[tuple[str, int]] = deque([(seed, 0)])
     results: list[dict] = []
 
-    logger.info("▶ Crawling [%s] %s (max %d pages)", label, seed, MAX_PAGES_PER_DOMAIN)
+    logger.info(
+        "▶ Crawling [%s] %s (max %d pages, depth %d)",
+        label, seed, MAX_PAGES_PER_DOMAIN, MAX_DEPTH,
+    )
 
     while queue and len(results) < MAX_PAGES_PER_DOMAIN:
-        url = queue.popleft()
+        url, depth = queue.popleft()
         if url in visited:
             continue
         visited.add(url)
@@ -52,12 +56,15 @@ def crawl_source(source: dict) -> list[dict]:
         if page is None:
             continue
 
-        # enqueue links FIRST before we potentially delete them
-        for link in page.get("links", []):
-            if link not in visited:
-                queue.append(link)
+        # Enqueue child links only if we haven't hit the depth limit
+        if depth < MAX_DEPTH:
+            for link in page.get("links", []):
+                if link not in visited:
+                    queue.append((link, depth + 1))
+        else:
+            logger.debug("  depth limit reached, not following links from: %s", url)
 
-        # now decide whether to store this page
+        # Decide whether to store this page
         if len(page["text"]) < MIN_TEXT_LENGTH:
             logger.debug("Too short, skipping: %s", url)
             continue
@@ -65,9 +72,10 @@ def crawl_source(source: dict) -> list[dict]:
         if _is_relevant(page["text"], keywords):
             page["category"] = source["category"]
             page["label"] = label
-            del page["links"]  # don't bloat the DB with link lists
+            page["depth"] = depth
+            del page["links"]
             results.append(page)
-            logger.info("  ✓ [%d/%d] %s", len(results), MAX_PAGES_PER_DOMAIN, url)
+            logger.info("  ✓ [%d/%d] depth=%d %s", len(results), MAX_PAGES_PER_DOMAIN, depth, url)
         else:
             logger.debug("  ✗ no keyword match: %s", url)
 

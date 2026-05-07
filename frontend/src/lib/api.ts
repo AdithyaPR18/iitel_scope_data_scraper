@@ -78,6 +78,26 @@ export async function searchPolicies(
   return res.json();
 }
 
+export interface RefreshStatus {
+  status: 'idle' | 'running' | 'started' | 'already_running';
+  running: boolean;
+  started_at: string | null;
+  finished_at: string | null;
+  error: string | null;
+}
+
+export async function triggerRefresh(): Promise<RefreshStatus> {
+  const res = await fetch(`${API_BASE}/refresh`, { method: 'POST' });
+  if (!res.ok) throw new Error('Failed to trigger refresh');
+  return res.json();
+}
+
+export async function getRefreshStatus(): Promise<RefreshStatus> {
+  const res = await fetch(`${API_BASE}/refresh/status`);
+  if (!res.ok) throw new Error('Failed to get refresh status');
+  return res.json();
+}
+
 export async function translateText(text: string): Promise<{ translated: string; error?: string }> {
   const res = await fetch(`${API_BASE}/translate`, {
     method: 'POST',

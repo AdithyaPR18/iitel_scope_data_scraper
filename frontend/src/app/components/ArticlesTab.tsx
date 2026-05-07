@@ -1,7 +1,14 @@
-import { useEffect, useState } from 'react';
-import { FileText, ExternalLink, ChevronLeft, ChevronRight, ArrowLeft, Globe } from 'lucide-react';
+import { useEffect, useState, useRef } from 'react';
+import {
+  FileText, ExternalLink, ChevronLeft, ChevronRight,
+  ArrowLeft, Globe, RefreshCw,
+} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
-import { fetchPolicies, fetchPolicy, translateText, type Article, type ArticleDetail } from '@/lib/api';
+import {
+  fetchPolicies, fetchPolicy, translateText,
+  triggerRefresh, getRefreshStatus,
+  type Article, type ArticleDetail,
+} from '@/lib/api';
 
 const LANG_NAMES: Record<string, string> = {
   fr: 'French', de: 'German', es: 'Spanish', it: 'Italian', pt: 'Portuguese',
@@ -9,7 +16,6 @@ const LANG_NAMES: Record<string, string> = {
   ko: 'Korean', ar: 'Arabic', hi: 'Hindi', tr: 'Turkish', sv: 'Swedish',
   da: 'Danish', fi: 'Finnish', no: 'Norwegian', cs: 'Czech', ro: 'Romanian',
 };
-
 
 const PAGE_SIZE = 20;
 
@@ -23,24 +29,68 @@ export function ArticlesTab() {
   const [selected, setSelected] = useState<ArticleDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
-  // translation state: map of article id → translated preview text
   const [translatedPreviews, setTranslatedPreviews] = useState<Record<string, string>>({});
   const [translatingId, setTranslatingId] = useState<string | null>(null);
-  // detail view translation
   const [translatedContent, setTranslatedContent] = useState<string | null>(null);
   const [translatingDetail, setTranslatingDetail] = useState(false);
 
-  useEffect(() => {
+  // refresh state
+  const [refreshRunning, setRefreshRunning] = useState(false);
+  const [refreshFinishedAt, setRefreshFinishedAt] = useState<string | null>(null);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // load articles whenever page changes or after a refresh completes
+  const loadArticles = () => {
     setLoading(true);
     setError(null);
     fetchPolicies(page, PAGE_SIZE)
-      .then((res) => {
-        setArticles(res.data);
-        setTotal(res.total);
-      })
+      .then((res) => { setArticles(res.data); setTotal(res.total); })
       .catch(() => setError('Failed to load policies. Is the backend running?'))
       .finally(() => setLoading(false));
-  }, [page]);
+  };
+
+  useEffect(() => { loadArticles(); }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // check refresh status on mount so the button reflects an in-progress crawl
+  useEffect(() => {
+    getRefreshStatus().then((s) => {
+      setRefreshRunning(s.running);
+      setRefreshFinishedAt(s.finished_at);
+      if (s.running) startPolling();
+    }).catch(() => {});
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const stopPolling = () => {
+    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
+  };
+
+  const startPolling = () => {
+    stopPolling();
+    pollRef.current = setInterval(async () => {
+      try {
+        const s = await getRefreshStatus();
+        setRefreshRunning(s.running);
+        setRefreshFinishedAt(s.finished_at);
+        if (!s.running) {
+          stopPolling();
+          loadArticles(); // reload after crawl finishes
+        }
+      } catch { stopPolling(); }
+    }, 15_000);
+  };
+
+  useEffect(() => () => stopPolling(), []); // cleanup on unmount
+
+  const handleRefresh = async () => {
+    if (refreshRunning) return;
+    try {
+      await triggerRefresh();
+      setRefreshRunning(true);
+      startPolling();
+    } catch {
+      setError('Could not start refresh. Is the backend running?');
+    }
+  };
 
   const openArticle = async (id: string) => {
     setDetailLoading(true);
@@ -57,8 +107,7 @@ export function ArticlesTab() {
 
   const translatePreview = async (article: Article) => {
     if (translatedPreviews[article.id]) {
-      // toggle off
-      setTranslatedPreviews((prev) => { const next = { ...prev }; delete next[article.id]; return next; });
+      setTranslatedPreviews((prev) => { const n = { ...prev }; delete n[article.id]; return n; });
       return;
     }
     setTranslatingId(article.id);
@@ -182,10 +231,33 @@ export function ArticlesTab() {
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <h2 className="text-2xl">Policy Updates</h2>
-        <div className="text-sm text-gray-500">
-          {loading ? 'Loading…' : `${total} articles`}
+
+        <div className="flex items-center gap-3">
+          {refreshFinishedAt && !refreshRunning && (
+            <span className="text-xs text-gray-400">
+              Last updated {new Date(refreshFinishedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+            </span>
+          )}
+          <button
+            onClick={handleRefresh}
+            disabled={refreshRunning}
+            title={refreshRunning ? 'Crawl in progress…' : 'Re-run scraper to fetch latest policies'}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 rounded-lg hover:bg-gray-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshRunning ? 'animate-spin' : ''}`} />
+            {refreshRunning ? 'Updating…' : 'Refresh'}
+          </button>
+          <span className="text-sm text-gray-500">
+            {loading ? 'Loading…' : `${total} articles`}
+          </span>
         </div>
       </div>
+
+      {refreshRunning && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-700">
+          Scraper is running in the background — this can take up to 30 minutes for all sources. The article list will refresh automatically when done.
+        </div>
+      )}
 
       {error && (
         <div className="rounded-lg border border-red-200 bg-red-50 p-4 text-sm text-red-700">
@@ -288,7 +360,6 @@ export function ArticlesTab() {
         </div>
       )}
 
-      {/* Pagination */}
       {totalPages > 1 && (
         <div className="flex items-center justify-between pt-4 border-t border-gray-200">
           <button
@@ -299,9 +370,7 @@ export function ArticlesTab() {
             <ChevronLeft className="w-4 h-4" />
             Previous
           </button>
-          <span className="text-sm text-gray-600">
-            Page {page} of {totalPages}
-          </span>
+          <span className="text-sm text-gray-600">Page {page} of {totalPages}</span>
           <button
             onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
             disabled={page === totalPages}

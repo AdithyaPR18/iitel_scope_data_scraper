@@ -1,5 +1,9 @@
 import os
 import re
+import sys
+import threading
+import subprocess
+from datetime import datetime, timezone
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -12,6 +16,34 @@ from langdetect import detect, LangDetectException
 from deep_translator import GoogleTranslator
 
 from db import supabase
+
+PIPELINE_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ai-policy-pipeline")
+)
+
+_refresh: dict = {"running": False, "started_at": None, "finished_at": None, "error": None}
+
+
+def _run_crawl() -> None:
+    _refresh["running"] = True
+    _refresh["started_at"] = datetime.now(timezone.utc).isoformat()
+    _refresh["error"] = None
+    try:
+        subprocess.run(
+            [sys.executable, "run.py"],
+            cwd=PIPELINE_DIR,
+            env={**os.environ},
+            check=True,
+            timeout=7200,  # 2-hour hard cap
+        )
+    except subprocess.CalledProcessError as exc:
+        _refresh["error"] = f"Pipeline exited with code {exc.returncode}"
+    except Exception as exc:
+        _refresh["error"] = str(exc)
+    finally:
+        _refresh["running"] = False
+        _refresh["finished_at"] = datetime.now(timezone.utc).isoformat()
+
 
 app = FastAPI(title="AI Policy API", version="1.0.0", docs_url=None, redoc_url=None)
 
@@ -299,3 +331,18 @@ def translate_text(req: TranslateRequest):
         return {"translated": translated or req.text}
     except Exception:
         return {"translated": req.text, "error": "Translation unavailable. Try again later."}
+
+
+# ── 5. Refresh (pipeline trigger) ─────────────────────────────────────────────
+
+@app.post("/refresh")
+def start_refresh():
+    if _refresh["running"]:
+        return {"status": "already_running", **_refresh}
+    threading.Thread(target=_run_crawl, daemon=True).start()
+    return {"status": "started", **_refresh}
+
+
+@app.get("/refresh/status")
+def refresh_status():
+    return {"status": "running" if _refresh["running"] else "idle", **_refresh}
