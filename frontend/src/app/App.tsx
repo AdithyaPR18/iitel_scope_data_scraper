@@ -17,10 +17,10 @@ export default function App() {
       <header className="bg-white border-b border-[#C9A961]/20 shadow-sm">
         <div className="max-w-7xl mx-auto px-6 py-6">
           <div className="flex items-center gap-4">
-            <img src={logo} alt="iitel solutions" className="w-16 h-16 bg-transparent" />
+            <img src={logo} alt="iitel solutions" className="w-16 h-16 mix-blend-mode-multiply" style={{ mixBlendMode: 'multiply' }} />
             <div>
               <h1 className="text-2xl font-semibold text-gray-900">
-                iitel solutions
+                International Institute of Technology Education and Leadership
               </h1>
               <p className="text-sm text-gray-600">
                 Global Policy Tracker - Real-time regulatory monitoring

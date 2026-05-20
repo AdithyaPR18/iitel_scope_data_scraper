@@ -1,7 +1,7 @@
-import { useEffect, useState, useMemo } from 'react';
-import { Plus, Trash2, Link, AlertCircle, CheckCircle, Search, EyeOff, Eye } from 'lucide-react';
+import { useEffect, useState, useMemo, useRef } from 'react';
+import { Plus, Trash2, Link, AlertCircle, CheckCircle, Search, EyeOff, Eye, FileUp, FileText } from 'lucide-react';
 import {
-  fetchAllSources, addSource, deleteSource, disableSource, enableSource,
+  fetchAllSources, addSource, deleteSource, disableSource, enableSource, uploadPdf,
   type SourceEntry,
 } from '@/lib/api';
 
@@ -41,6 +41,12 @@ export function SourcesTab() {
   const [addedId, setAddedId] = useState<string | null>(null);
 
   const [pendingUrl, setPendingUrl] = useState<string | null>(null);
+
+  // PDF upload state
+  const [pdfDragging, setPdfDragging] = useState(false);
+  const [pdfUploading, setPdfUploading] = useState(false);
+  const [pdfResults, setPdfResults] = useState<{ name: string; title: string; pages: number; ok: boolean; error?: string }[]>([]);
+  const pdfInputRef = useRef<HTMLInputElement>(null);
 
   const load = () => {
     setLoading(true);
@@ -105,6 +111,24 @@ export function SourcesTab() {
     } finally {
       setPendingUrl(null);
     }
+  };
+
+  const handlePdfFiles = async (files: FileList | File[]) => {
+    const pdfs = Array.from(files).filter((f) => f.name.toLowerCase().endsWith('.pdf'));
+    if (!pdfs.length) return;
+    setPdfUploading(true);
+    const results = await Promise.all(
+      pdfs.map(async (file) => {
+        try {
+          const res = await uploadPdf(file);
+          return { name: file.name, title: res.title, pages: res.pages, ok: true };
+        } catch (err) {
+          return { name: file.name, title: '', pages: 0, ok: false, error: err instanceof Error ? err.message : 'Upload failed' };
+        }
+      })
+    );
+    setPdfResults((prev) => [...results, ...prev]);
+    setPdfUploading(false);
   };
 
   const filtered = useMemo(() => {
@@ -193,6 +217,59 @@ export function SourcesTab() {
             {adding ? 'Adding…' : 'Add source'}
           </button>
         </form>
+      </div>
+
+      {/* PDF upload */}
+      <div className="border border-gray-200 rounded-lg p-6 bg-white">
+        <h3 className="font-semibold text-gray-900 mb-4">Upload PDF documents</h3>
+        <input
+          ref={pdfInputRef}
+          type="file"
+          accept=".pdf"
+          multiple
+          className="hidden"
+          onChange={(e) => e.target.files && handlePdfFiles(e.target.files)}
+        />
+        <div
+          onDragOver={(e) => { e.preventDefault(); setPdfDragging(true); }}
+          onDragLeave={() => setPdfDragging(false)}
+          onDrop={(e) => { e.preventDefault(); setPdfDragging(false); handlePdfFiles(e.dataTransfer.files); }}
+          onClick={() => pdfInputRef.current?.click()}
+          className={`flex flex-col items-center justify-center gap-3 border-2 border-dashed rounded-lg py-10 cursor-pointer transition-colors ${
+            pdfDragging ? 'border-[#C9A961] bg-[#C9A961]/5' : 'border-gray-300 hover:border-[#C9A961]/60 hover:bg-gray-50'
+          }`}
+        >
+          <FileUp className={`w-8 h-8 ${pdfDragging ? 'text-[#C9A961]' : 'text-gray-400'}`} />
+          <div className="text-center">
+            <p className="text-sm font-medium text-gray-700">
+              {pdfUploading ? 'Uploading…' : 'Drop PDFs here or click to browse'}
+            </p>
+            <p className="text-xs text-gray-400 mt-1">
+              Text will be extracted and added to the article database. Image-only PDFs are not supported.
+            </p>
+          </div>
+        </div>
+
+        {pdfResults.length > 0 && (
+          <div className="mt-4 space-y-2">
+            {pdfResults.map((r, i) => (
+              <div key={i} className={`flex items-start gap-3 p-3 rounded-lg text-sm ${r.ok ? 'bg-green-50' : 'bg-red-50'}`}>
+                <FileText className={`w-4 h-4 mt-0.5 flex-shrink-0 ${r.ok ? 'text-green-600' : 'text-red-500'}`} />
+                <div className="flex-1 min-w-0">
+                  <p className={`font-medium truncate ${r.ok ? 'text-green-800' : 'text-red-700'}`}>
+                    {r.name}
+                  </p>
+                  {r.ok
+                    ? <p className="text-green-600 text-xs">Added as "{r.title}" · {r.pages} page{r.pages !== 1 ? 's' : ''}</p>
+                    : <p className="text-red-600 text-xs">{r.error}</p>
+                  }
+                </div>
+                {r.ok && <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0" />}
+                {!r.ok && <AlertCircle className="w-4 h-4 text-red-500 flex-shrink-0" />}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Filters */}

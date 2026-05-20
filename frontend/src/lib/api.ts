@@ -167,6 +167,24 @@ export async function enableSource(url: string): Promise<void> {
   if (!res.ok) throw new Error('Failed to enable source');
 }
 
+export interface PdfUploadResult {
+  id: string;
+  title: string;
+  pages: number;
+  chars: number;
+}
+
+export async function uploadPdf(file: File): Promise<PdfUploadResult> {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`${API_BASE}/upload/pdf`, { method: 'POST', body: form });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail ?? 'Upload failed');
+  }
+  return res.json();
+}
+
 export async function askChat(question: string): Promise<ChatResponse> {
   const res = await fetch(`${API_BASE}/chat`, {
     method: 'POST',

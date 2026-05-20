@@ -9,11 +9,14 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+import io
 import anthropic
-from fastapi import FastAPI, Query
+import pypdf
+from fastapi import FastAPI, Query, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from langdetect import detect, LangDetectException
+from langdetect import detect, LangDetectException, DetectorFactory
+DetectorFactory.seed = 0  # deterministic results
 from deep_translator import GoogleTranslator
 
 from db import supabase
@@ -79,22 +82,54 @@ SYSTEM_PROMPT = (
 )
 
 
+def _detect_by_script(text: str) -> str | None:
+    """Return a language code if the text contains unambiguous non-Latin script characters."""
+    for c in text:
+        o = ord(c)
+        if 0x3040 <= o <= 0x309F or 0x30A0 <= o <= 0x30FF:
+            return 'ja'   # Hiragana / Katakana → Japanese
+        if 0xAC00 <= o <= 0xD7AF:
+            return 'ko'   # Hangul → Korean
+        if 0x4E00 <= o <= 0x9FFF:
+            return 'zh'   # CJK (no kana found yet) → Chinese
+        if 0x0600 <= o <= 0x06FF:
+            return 'ar'   # Arabic
+        if 0x0900 <= o <= 0x097F:
+            return 'hi'   # Devanagari → Hindi
+        if 0x0E00 <= o <= 0x0E7F:
+            return 'th'   # Thai
+    return None
+
+
 def _detect_language(title: str, content: str = "") -> str:
-    """Detect language from title first (most reliable), fall back to content."""
-    for sample in (title, content[:300]):
-        if not sample or len(sample.strip()) < 15:
+    """Detect language using script analysis first, langdetect second."""
+    title_s = (title or "").strip()
+    # 1. Script detection on title — fast and never wrong for CJK/Arabic/etc.
+    if title_s:
+        lang = _detect_by_script(title_s)
+        if lang:
+            return lang
+
+    # 2. Script detection on a clean content sample
+    content_s = (content or "")[:500].strip()
+    if content_s and not _is_garbled(content_s):
+        lang = _detect_by_script(content_s)
+        if lang:
+            return lang
+
+    # 3. langdetect for Latin-script languages (French, Spanish, German, etc.)
+    #    Try title first — it's reliable; avoid garbled content.
+    for sample, min_len in ((title_s, 15), (content_s if not _is_garbled(content_s) else "", 60)):
+        if not sample or len(sample) < min_len:
             continue
         try:
             lang = detect(sample)
-            if lang != "en":
+            if lang and lang != "en":
                 return lang
         except LangDetectException:
             continue
-    # Re-check title alone in case both returned 'en'
-    try:
-        return detect(title) if len(title.strip()) >= 15 else "en"
-    except LangDetectException:
-        return "en"
+
+    return "en"
 
 
 def _is_garbled(text: str) -> bool:
@@ -436,7 +471,6 @@ def list_sources():
 
 @app.post("/sources")
 def add_source(req: SourceRequest):
-    from fastapi import HTTPException
     try:
         clean_url = _validate_url(req.url)
     except ValueError:
@@ -463,3 +497,46 @@ def disable_source(req: UrlRequest):
 def enable_source(req: UrlRequest):
     supabase.table("disabled_sources").delete().eq("url", req.url).execute()
     return {"enabled": req.url}
+
+
+# ── 7. PDF upload ─────────────────────────────────────────────────────────────
+
+@app.post("/upload/pdf")
+async def upload_pdf(file: UploadFile = File(...)):
+    if not (file.filename or "").lower().endswith(".pdf"):
+        raise HTTPException(status_code=422, detail="Only PDF files are accepted")
+
+    raw = await file.read()
+    try:
+        reader = pypdf.PdfReader(io.BytesIO(raw))
+        pages_text = [page.extract_text() or "" for page in reader.pages]
+        full_text = "\n\n".join(pages_text).strip()
+        meta = reader.metadata or {}
+        pdf_title = (
+            (meta.get("/Title") or "").strip()
+            or (file.filename or "").removesuffix(".pdf").replace("_", " ").replace("-", " ").strip()
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=f"Could not parse PDF: {exc}")
+
+    if not full_text:
+        raise HTTPException(
+            status_code=422,
+            detail="No text could be extracted — this PDF may be image-only (scanned). "
+                   "Only PDFs with a text layer are supported.",
+        )
+
+    row = supabase.table("articles").insert({
+        "title": pdf_title,
+        "url": None,
+        "source": "PDF Upload",
+        "published_at": None,
+        "content": full_text,
+    }).execute()
+
+    return {
+        "id": row.data[0]["id"],
+        "title": pdf_title,
+        "pages": len(reader.pages),
+        "chars": len(full_text),
+    }
