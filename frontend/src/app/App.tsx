@@ -1,11 +1,12 @@
 import { useState } from 'react';
-import { FileText, MessageSquare, Search } from 'lucide-react';
+import { FileText, MessageSquare, Search, Globe } from 'lucide-react';
 import { ArticlesTab } from './components/ArticlesTab';
 import { ChatbotTab } from './components/ChatbotTab';
 import { SearchTab } from './components/SearchTab';
+import { SourcesTab } from './components/SourcesTab';
 import logo from '../imports/Screenshot_2026-04-21_at_11.39.38 AM.png';
 
-type TabType = 'articles' | 'chat' | 'search';
+type TabType = 'articles' | 'chat' | 'search' | 'sources';
 
 export default function App() {
   const [activeTab, setActiveTab] = useState<TabType>('articles');
@@ -68,6 +69,18 @@ export default function App() {
               <Search className="w-5 h-5" />
               <span className="font-medium">Search</span>
             </button>
+
+            <button
+              onClick={() => setActiveTab('sources')}
+              className={`flex items-center gap-2 px-6 py-4 border-b-2 transition-colors ${
+                activeTab === 'sources'
+                  ? 'border-[#C9A961] text-[#C9A961]'
+                  : 'border-transparent text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              <Globe className="w-5 h-5" />
+              <span className="font-medium">Sources</span>
+            </button>
           </div>
         </div>
       </div>
@@ -77,6 +90,7 @@ export default function App() {
         {activeTab === 'articles' && <ArticlesTab />}
         {activeTab === 'chat' && <ChatbotTab />}
         {activeTab === 'search' && <SearchTab />}
+        {activeTab === 'sources' && <SourcesTab />}
       </main>
     </div>
   );

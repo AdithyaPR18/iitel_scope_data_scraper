@@ -28,6 +28,7 @@ import sys
 from config import SOURCES, OUTPUT_DIR, OUTPUT_FILE
 from pipeline import crawl_source
 from database import upsert_pages, load_db
+from database.supabase_client import supabase
 
 # ── logging setup ─────────────────────────────────────────────────────────────
 logging.basicConfig(
@@ -40,6 +41,31 @@ logging.basicConfig(
     ],
 )
 logger = logging.getLogger(__name__)
+
+
+# ── Custom / disabled sources ─────────────────────────────────────────────────
+
+def _load_custom_sources() -> list[dict]:
+    """Fetch user-submitted sources from Supabase and convert to source dicts."""
+    try:
+        rows = supabase.table("custom_sources").select("url, label").execute()
+        return [
+            {"category": "Custom", "label": r["label"], "url": r["url"], "keywords": []}
+            for r in rows.data
+        ]
+    except Exception as exc:
+        logger.warning("Could not load custom sources: %s", exc)
+        return []
+
+
+def _load_disabled_urls() -> set[str]:
+    """Return the set of URLs that have been disabled via the Sources UI."""
+    try:
+        rows = supabase.table("disabled_sources").select("url").execute()
+        return {r["url"] for r in rows.data}
+    except Exception as exc:
+        logger.warning("Could not load disabled sources: %s", exc)
+        return set()
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
@@ -83,8 +109,14 @@ def main():
         query_db(args.query)
         return
 
-    # Filter sources
-    sources = SOURCES
+    # Build source list: hardcoded + user-submitted, minus disabled
+    custom = _load_custom_sources()
+    if custom:
+        logger.info("Loaded %d custom source(s) from Supabase", len(custom))
+    disabled = _load_disabled_urls()
+    if disabled:
+        logger.info("Skipping %d disabled source(s)", len(disabled))
+    sources = [s for s in list(SOURCES) + custom if s["url"] not in disabled]
     if args.category:
         sources = [s for s in sources if s["category"].lower() == args.category.lower()]
     if args.labels:

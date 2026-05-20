@@ -108,6 +108,65 @@ export async function translateText(text: string): Promise<{ translated: string;
   return res.json();
 }
 
+export interface CustomSource {
+  id: string;
+  url: string;
+  label: string;
+  added_at: string;
+}
+
+export interface SourceEntry {
+  id: string | null;
+  url: string;
+  label: string;
+  category: string;
+  source_type: 'builtin' | 'custom';
+  disabled: boolean;
+  added_at: string | null;
+}
+
+export async function fetchAllSources(): Promise<{ data: SourceEntry[] }> {
+  const res = await fetch(`${API_BASE}/sources/all`);
+  if (!res.ok) throw new Error('Failed to fetch sources');
+  return res.json();
+}
+
+export async function addSource(url: string, label: string): Promise<CustomSource> {
+  const res = await fetch(`${API_BASE}/sources`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, label }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail ?? 'Failed to add source');
+  }
+  return res.json();
+}
+
+export async function deleteSource(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/sources/${id}`, { method: 'DELETE' });
+  if (!res.ok) throw new Error('Failed to delete source');
+}
+
+export async function disableSource(url: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/sources/disable`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  });
+  if (!res.ok) throw new Error('Failed to disable source');
+}
+
+export async function enableSource(url: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/sources/enable`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url }),
+  });
+  if (!res.ok) throw new Error('Failed to enable source');
+}
+
 export async function askChat(question: string): Promise<ChatResponse> {
   const res = await fetch(`${API_BASE}/chat`, {
     method: 'POST',

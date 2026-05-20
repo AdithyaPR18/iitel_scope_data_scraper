@@ -4,6 +4,7 @@ import sys
 import threading
 import subprocess
 from datetime import datetime, timezone
+from urllib.parse import urlparse
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -50,9 +51,17 @@ app = FastAPI(title="AI Policy API", version="1.0.0", docs_url=None, redoc_url=N
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # tighten to your frontend URL before going to production
-    allow_methods=["GET", "POST"],
+    allow_methods=["GET", "POST", "DELETE"],
     allow_headers=["*"],
 )
+
+# Import built-in source list from the pipeline config
+import sys as _sys
+_sys.path.insert(0, PIPELINE_DIR)
+try:
+    from config.sources import SOURCES as _BUILTIN_SOURCES  # type: ignore[import]
+except Exception:
+    _BUILTIN_SOURCES = []
 
 _STOPWORDS = {
     "what", "does", "have", "this", "that", "with", "from", "they", "about",
@@ -346,3 +355,111 @@ def start_refresh():
 @app.get("/refresh/status")
 def refresh_status():
     return {"status": "running" if _refresh["running"] else "idle", **_refresh}
+
+
+# ── 6. Sources ────────────────────────────────────────────────────────────────
+
+class SourceRequest(BaseModel):
+    url: str
+    label: str = ""
+
+
+class UrlRequest(BaseModel):
+    url: str
+
+
+def _validate_url(url: str) -> str:
+    """Normalise and validate a URL. Returns cleaned URL or raises ValueError."""
+    url = url.strip()
+    if not url.startswith(("http://", "https://")):
+        url = "https://" + url
+    parsed = urlparse(url)
+    if not parsed.netloc:
+        raise ValueError("Invalid URL")
+    return url
+
+
+@app.get("/sources/all")
+def list_all_sources():
+    """Return every source (built-in + custom) with disabled status."""
+    disabled_rows = supabase.table("disabled_sources").select("url").execute()
+    disabled_urls: set[str] = {r["url"] for r in disabled_rows.data}
+
+    custom_rows = (
+        supabase.table("custom_sources")
+        .select("id, url, label, added_at")
+        .order("added_at", desc=True)
+        .execute()
+    )
+
+    result = []
+
+    # Built-in sources first
+    for s in _BUILTIN_SOURCES:
+        result.append({
+            "id": None,
+            "url": s["url"],
+            "label": s["label"],
+            "category": s.get("category", "Built-in"),
+            "source_type": "builtin",
+            "disabled": s["url"] in disabled_urls,
+            "added_at": None,
+        })
+
+    # Custom sources (skip any URL already in built-in list)
+    builtin_urls = {s["url"] for s in _BUILTIN_SOURCES}
+    for r in custom_rows.data:
+        if r["url"] not in builtin_urls:
+            result.append({
+                "id": r["id"],
+                "url": r["url"],
+                "label": r["label"],
+                "category": "Custom",
+                "source_type": "custom",
+                "disabled": r["url"] in disabled_urls,
+                "added_at": r["added_at"],
+            })
+
+    return {"data": result}
+
+
+@app.get("/sources")
+def list_sources():
+    rows = (
+        supabase.table("custom_sources")
+        .select("id, url, label, added_at")
+        .order("added_at", desc=True)
+        .execute()
+    )
+    return {"data": rows.data}
+
+
+@app.post("/sources")
+def add_source(req: SourceRequest):
+    from fastapi import HTTPException
+    try:
+        clean_url = _validate_url(req.url)
+    except ValueError:
+        raise HTTPException(status_code=422, detail="Invalid URL")
+
+    label = req.label.strip() or urlparse(clean_url).netloc
+    row = supabase.table("custom_sources").insert({"url": clean_url, "label": label}).execute()
+    return row.data[0]
+
+
+@app.delete("/sources/{source_id}")
+def delete_source(source_id: str):
+    supabase.table("custom_sources").delete().eq("id", source_id).execute()
+    return {"deleted": source_id}
+
+
+@app.post("/sources/disable")
+def disable_source(req: UrlRequest):
+    supabase.table("disabled_sources").upsert({"url": req.url}).execute()
+    return {"disabled": req.url}
+
+
+@app.post("/sources/enable")
+def enable_source(req: UrlRequest):
+    supabase.table("disabled_sources").delete().eq("url", req.url).execute()
+    return {"enabled": req.url}
