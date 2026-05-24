@@ -21,6 +21,14 @@ from deep_translator import GoogleTranslator
 
 from db import supabase
 
+import logging
+logger = logging.getLogger(__name__)
+
+# Embeddings are optional — degrade gracefully if key not configured yet
+_EMBEDDINGS_READY = bool(os.getenv("OPENAI_API_KEY", "").strip().startswith("sk-"))
+if _EMBEDDINGS_READY:
+    from embeddings import embed_article, embed_pending_articles, search_chunks
+
 PIPELINE_DIR = os.path.normpath(
     os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ai-policy-pipeline")
 )
@@ -40,6 +48,12 @@ def _run_crawl() -> None:
             check=True,
             timeout=7200,  # 2-hour hard cap
         )
+        # Embed any articles that were just added (skips already-embedded ones)
+        if _EMBEDDINGS_READY:
+            try:
+                embed_pending_articles()
+            except Exception as exc:
+                _refresh["error"] = (_refresh.get("error") or "") + f" | Embedding error: {exc}"
     except subprocess.CalledProcessError as exc:
         _refresh["error"] = f"Pipeline exited with code {exc.returncode}"
     except Exception as exc:
@@ -184,8 +198,8 @@ def _keywords(question: str) -> list[str]:
     return [w for w in words if len(w) > 3 and w not in _STOPWORDS][:5]
 
 
-def _fetch_context(question: str) -> list[dict]:
-    """Find articles relevant to a question via keyword search."""
+def _fetch_context_keywords(question: str) -> list[dict]:
+    """Keyword-based context retrieval (fallback when embeddings unavailable)."""
     seen: set[str] = set()
     articles: list[dict] = []
 
@@ -203,7 +217,6 @@ def _fetch_context(question: str) -> list[dict]:
                 seen.add(row["id"])
                 articles.append(row)
 
-    # Fallback: return recent articles if no keyword matches
     if not articles:
         rows = (
             supabase.table("articles")
@@ -214,6 +227,54 @@ def _fetch_context(question: str) -> list[dict]:
         articles = rows.data
 
     return articles[:8]
+
+
+def _fetch_context(question: str) -> list[dict]:
+    """
+    Vector similarity search when embeddings are available, keyword fallback otherwise.
+    Returns a list of article dicts with id, title, url, source, content.
+    """
+    if not _EMBEDDINGS_READY:
+        return _fetch_context_keywords(question)
+
+    try:
+        chunks = search_chunks(question, match_count=12)
+        if not chunks:
+            return _fetch_context_keywords(question)
+
+        # Deduplicate by article — keep the highest-similarity chunk per article,
+        # then fetch full article metadata for the top 8 unique articles.
+        seen: dict[str, float] = {}
+        for c in chunks:
+            aid = c["article_id"]
+            if aid not in seen or c["similarity"] > seen[aid]:
+                seen[aid] = c["similarity"]
+
+        top_ids = sorted(seen, key=lambda k: seen[k], reverse=True)[:8]
+
+        # Build a map of article_id → best chunk content for the context window
+        best_chunk: dict[str, str] = {}
+        for c in chunks:
+            aid = c["article_id"]
+            if aid in top_ids and (aid not in best_chunk or c["similarity"] > seen.get(aid, 0)):
+                best_chunk[aid] = c["content"]
+
+        rows = (
+            supabase.table("articles")
+            .select("id, title, url, source")
+            .in_("id", top_ids)
+            .execute()
+        )
+
+        # Attach the relevant chunk content (not the full article — keeps context tight)
+        return [
+            {**row, "content": best_chunk.get(row["id"], "")}
+            for row in rows.data
+        ]
+
+    except Exception as exc:
+        logger.warning("Vector search failed, falling back to keyword search: %s", exc)
+        return _fetch_context_keywords(question)
 
 
 # ── Health ────────────────────────────────────────────────────────────────────
@@ -534,9 +595,31 @@ async def upload_pdf(file: UploadFile = File(...)):
         "content": full_text,
     }).execute()
 
+    article_id = row.data[0]["id"]
+
+    if _EMBEDDINGS_READY:
+        try:
+            embed_article(article_id, pdf_title, full_text)
+        except Exception as exc:
+            logger.warning("PDF embedding failed for %s: %s", article_id, exc)
+
     return {
-        "id": row.data[0]["id"],
+        "id": article_id,
         "title": pdf_title,
         "pages": len(reader.pages),
         "chars": len(full_text),
     }
+
+
+# ── 8. Embedding backfill ─────────────────────────────────────────────────────
+
+@app.post("/embed/backfill")
+def embed_backfill():
+    """Embed all articles that don't have chunks yet. Safe to call multiple times."""
+    if not _EMBEDDINGS_READY:
+        raise HTTPException(status_code=503, detail="OPENAI_API_KEY not configured")
+    try:
+        total = embed_pending_articles()
+        return {"chunks_created": total}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))

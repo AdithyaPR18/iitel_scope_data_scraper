@@ -4,7 +4,7 @@ import { ArticlesTab } from './components/ArticlesTab';
 import { ChatbotTab } from './components/ChatbotTab';
 import { SearchTab } from './components/SearchTab';
 import { SourcesTab } from './components/SourcesTab';
-import logo from '../imports/Screenshot_2026-04-21_at_11.39.38 AM.png';
+import logo from '../imports/logo.png';
 
 type TabType = 'articles' | 'chat' | 'search' | 'sources';
 
