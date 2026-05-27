@@ -247,7 +247,7 @@ def _fetch_context_keywords(question: str) -> list[dict]:
         esc = _escape_like(kw)
         rows = (
             supabase.table("articles")
-            .select("id, title, url, source, content")
+            .select("id, title, url, source, published_at, content")
             .or_(f"title.ilike.%{esc}%,content.ilike.%{esc}%")
             .limit(4)
             .execute()
@@ -260,60 +260,76 @@ def _fetch_context_keywords(question: str) -> list[dict]:
     if not articles:
         rows = (
             supabase.table("articles")
-            .select("id, title, url, source, content")
+            .select("id, title, url, source, published_at, content")
             .limit(5)
             .execute()
         )
         articles = rows.data
 
-    return articles[:8]
+    return articles[:10]
 
 
 def _fetch_context(question: str) -> list[dict]:
     """
-    Vector similarity search when embeddings are available, keyword fallback otherwise.
-    Returns a list of article dicts with id, title, url, source, content.
+    Hybrid retrieval: vector similarity + keyword search merged with Reciprocal Rank Fusion.
+    Falls back to keyword-only when embeddings are unavailable.
+    Returns up to 10 article dicts with id, title, url, source, published_at, content.
     """
     if not _EMBEDDINGS_READY:
         return _fetch_context_keywords(question)
 
     try:
-        chunks = search_chunks(question, match_count=12)
-        if not chunks:
-            return _fetch_context_keywords(question)
+        # ── 1. Vector search: top-20 chunks, keep best chunk per article ──────
+        chunks = search_chunks(question, match_count=20)
 
-        # Deduplicate by article — keep the highest-similarity chunk per article,
-        # then fetch full article metadata for the top 8 unique articles.
-        seen: dict[str, float] = {}
-        for c in chunks:
-            aid = c["article_id"]
-            if aid not in seen or c["similarity"] > seen[aid]:
-                seen[aid] = c["similarity"]
-
-        top_ids = sorted(seen, key=lambda k: seen[k], reverse=True)[:8]
-
-        # Build a map of article_id → best chunk content for the context window
+        vec_scores: dict[str, float] = {}
         best_chunk: dict[str, str] = {}
         for c in chunks:
             aid = c["article_id"]
-            if aid in top_ids and (aid not in best_chunk or c["similarity"] > seen.get(aid, 0)):
+            if aid not in vec_scores or c["similarity"] > vec_scores[aid]:
+                vec_scores[aid] = c["similarity"]
                 best_chunk[aid] = c["content"]
 
+        vec_ranked = sorted(vec_scores, key=lambda k: vec_scores[k], reverse=True)
+
+        # ── 2. Keyword search: catches exact names/acronyms the embeddings miss
+        kw_articles = _fetch_context_keywords(question)
+        kw_by_id = {a["id"]: a for a in kw_articles}
+        kw_ranked = [a["id"] for a in kw_articles]
+
+        # ── 3. Reciprocal Rank Fusion (k=60 is the standard default) ─────────
+        K = 60
+        rrf: dict[str, float] = {}
+        for rank, aid in enumerate(vec_ranked, start=1):
+            rrf[aid] = rrf.get(aid, 0) + 1 / (rank + K)
+        for rank, aid in enumerate(kw_ranked, start=1):
+            rrf[aid] = rrf.get(aid, 0) + 1 / (rank + K)
+
+        top_ids = sorted(rrf, key=lambda k: rrf[k], reverse=True)[:10]
+
+        if not top_ids:
+            return _fetch_context_keywords(question)
+
+        # ── 4. Fetch metadata (incl. published_at) for the merged top articles
         rows = (
             supabase.table("articles")
-            .select("id, title, url, source")
+            .select("id, title, url, source, published_at")
             .in_("id", top_ids)
             .execute()
         )
 
-        # Attach the relevant chunk content (not the full article — keeps context tight)
-        return [
-            {**row, "content": best_chunk.get(row["id"], "")}
-            for row in rows.data
-        ]
+        result = []
+        for row in rows.data:
+            aid = row["id"]
+            # Prefer the most-relevant vector chunk; fall back to full article text
+            content = best_chunk.get(aid) or kw_by_id.get(aid, {}).get("content", "")
+            result.append({**row, "content": content})
+
+        result.sort(key=lambda r: rrf.get(r["id"], 0), reverse=True)
+        return result
 
     except Exception as exc:
-        logger.warning("Vector search failed, falling back to keyword search: %s", exc)
+        logger.warning("Hybrid search failed, falling back to keyword search: %s", exc)
         return _fetch_context_keywords(question)
 
 
@@ -561,7 +577,7 @@ def chat(req: ChatRequest, authorization: str | None = Header(default=None)):
     articles = _fetch_context(req.question)
 
     context = "\n\n---\n\n".join(
-        f"Source: {a['source']}\nTitle: {a['title']}\nURL: {a['url']}\n\n{_fix_encoding(a.get('content') or '')[:3000]}"
+        f"Source: {a['source']}\nTitle: {a['title']}\nURL: {a['url']}\nPublished: {a.get('published_at') or 'Unknown'}\n\n{_fix_encoding(a.get('content') or '')[:3000]}"
         for a in articles
     )
 
@@ -582,7 +598,7 @@ def chat(req: ChatRequest, authorization: str | None = Header(default=None)):
     )
 
     answer = msg.content[0].text
-    sources = [{"title": a["title"], "url": a["url"], "source": a["source"]} for a in articles]
+    sources = [{"title": a["title"], "url": a["url"], "source": a["source"], "published_at": a.get("published_at")} for a in articles]
 
     # Persist to chat_history if we have a logged-in user + session
     if user_id and req.session_id:
@@ -609,10 +625,10 @@ def chat_stream(req: ChatRequest, authorization: str | None = Header(default=Non
 
     articles = _fetch_context(req.question)
     context = "\n\n---\n\n".join(
-        f"Source: {a['source']}\nTitle: {a['title']}\nURL: {a['url']}\n\n{_fix_encoding(a.get('content') or '')[:3000]}"
+        f"Source: {a['source']}\nTitle: {a['title']}\nURL: {a['url']}\nPublished: {a.get('published_at') or 'Unknown'}\n\n{_fix_encoding(a.get('content') or '')[:3000]}"
         for a in articles
     )
-    sources = [{"title": a["title"], "url": a["url"], "source": a["source"]} for a in articles]
+    sources = [{"title": a["title"], "url": a["url"], "source": a["source"], "published_at": a.get("published_at")} for a in articles]
 
     prior = [{"role": m.role, "content": m.content} for m in req.history[-20:]]
     current = {

@@ -48,6 +48,7 @@ export interface ChatSource {
   title: string;
   url: string | null;
   source: string | null;
+  published_at?: string | null;
 }
 
 export interface ChatResponse {

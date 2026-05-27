@@ -253,6 +253,11 @@ export function ChatbotTab() {
                       ) : (
                         <span>{s.title || s.source}</span>
                       )}
+                      {s.published_at && (
+                        <span className="text-gray-400 ml-1 flex-shrink-0">
+                          · {new Date(s.published_at).toLocaleDateString(undefined, { year: 'numeric', month: 'short' })}
+                        </span>
+                      )}
                     </div>
                   ))}
                 </div>
