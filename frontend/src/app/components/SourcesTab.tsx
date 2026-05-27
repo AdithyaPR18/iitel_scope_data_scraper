@@ -4,6 +4,7 @@ import {
   fetchAllSources, addSource, deleteSource, disableSource, enableSource, uploadPdf,
   type SourceEntry,
 } from '@/lib/api';
+import { useAuth } from '@/app/contexts/AuthContext';
 
 const CATEGORY_COLORS: Record<string, string> = {
   Custom: 'bg-purple-50 text-purple-700',
@@ -26,6 +27,7 @@ function categoryBadge(category: string) {
 }
 
 export function SourcesTab() {
+  const { user } = useAuth();
   const [sources, setSources] = useState<SourceEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -379,8 +381,8 @@ export function SourcesTab() {
                   {isPending ? '…' : source.disabled ? 'Enable' : 'Disable'}
                 </button>
 
-                {/* Delete (custom sources only) */}
-                {source.source_type === 'custom' && (
+                {/* Delete (custom sources, manager only) */}
+                {source.source_type === 'custom' && user?.is_manager && (
                   <button
                     onClick={() => handleDelete(source)}
                     disabled={isPending}

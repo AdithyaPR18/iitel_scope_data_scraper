@@ -12,7 +12,7 @@ load_dotenv()
 import io
 import anthropic
 import pypdf
-from fastapi import FastAPI, Query, UploadFile, File, HTTPException
+from fastapi import FastAPI, Query, UploadFile, File, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from langdetect import detect, LangDetectException, DetectorFactory
@@ -20,6 +20,7 @@ DetectorFactory.seed = 0  # deterministic results
 from deep_translator import GoogleTranslator
 
 from db import supabase
+import auth as _auth
 
 import logging
 logger = logging.getLogger(__name__)
@@ -34,6 +35,9 @@ PIPELINE_DIR = os.path.normpath(
 )
 
 _refresh: dict = {"running": False, "started_at": None, "finished_at": None, "error": None}
+
+MANAGER_EMAIL = "karla.bailey@iitelsolutions.com"
+MANAGER_PASSWORD = "iitel123"
 
 
 def _run_crawl() -> None:
@@ -94,6 +98,23 @@ SYSTEM_PROMPT = (
     "name and URL. If the provided documents don't contain enough information to answer "
     "the question fully, say so clearly rather than speculating."
 )
+
+
+# ── Auth helpers ──────────────────────────────────────────────────────────────
+
+def _get_current_user(authorization: str | None = Header(default=None)) -> dict:
+    if not authorization or not authorization.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        return _auth.decode_token(authorization.split(" ", 1)[1])
+    except Exception:
+        raise HTTPException(status_code=401, detail="Invalid or expired token")
+
+
+def _require_manager(user: dict = Depends(_get_current_user)) -> dict:
+    if not user.get("is_manager"):
+        raise HTTPException(status_code=403, detail="Manager access required")
+    return user
 
 
 def _detect_by_script(text: str) -> str | None:
@@ -277,11 +298,119 @@ def _fetch_context(question: str) -> list[dict]:
         return _fetch_context_keywords(question)
 
 
+# ── Startup ───────────────────────────────────────────────────────────────────
+
+@app.on_event("startup")
+def _ensure_manager():
+    """Create the manager account on first boot if it doesn't already exist."""
+    try:
+        existing = supabase.table("users").select("id").eq("email", MANAGER_EMAIL).execute()
+        if not existing.data:
+            supabase.table("users").insert({
+                "email": MANAGER_EMAIL,
+                "password_hash": _auth.hash_password(MANAGER_PASSWORD),
+                "is_manager": True,
+            }).execute()
+            logger.info("Manager account created: %s", MANAGER_EMAIL)
+    except Exception as exc:
+        logger.warning("Could not verify/create manager account: %s", exc)
+
+
 # ── Health ────────────────────────────────────────────────────────────────────
 
 @app.get("/health")
 def health():
     return {"status": "ok"}
+
+
+# ── 0. Auth ───────────────────────────────────────────────────────────────────
+
+class LoginRequest(BaseModel):
+    email: str
+    password: str
+
+
+class SignupRequest(BaseModel):
+    email: str
+    password: str
+
+
+@app.post("/auth/login")
+def login(req: LoginRequest):
+    rows = (
+        supabase.table("users")
+        .select("id, email, password_hash, is_manager")
+        .eq("email", req.email.strip().lower())
+        .execute()
+    )
+    if not rows.data:
+        raise HTTPException(status_code=404, detail="No account found with this email address")
+    user = rows.data[0]
+    if not _auth.verify_password(req.password, user["password_hash"]):
+        raise HTTPException(status_code=401, detail="Incorrect password")
+    token = _auth.create_token(user["id"], user["email"], user["is_manager"])
+    return {"token": token, "user": {"id": user["id"], "email": user["email"], "is_manager": user["is_manager"]}}
+
+
+@app.post("/auth/signup")
+def signup(req: SignupRequest):
+    email = req.email.strip().lower()
+    if "@" not in email:
+        raise HTTPException(status_code=422, detail="Invalid email address")
+    if len(req.password) < 6:
+        raise HTTPException(status_code=422, detail="Password must be at least 6 characters")
+    existing = supabase.table("users").select("id").eq("email", email).execute()
+    if existing.data:
+        raise HTTPException(status_code=409, detail="An account with this email already exists")
+    row = supabase.table("users").insert({
+        "email": email,
+        "password_hash": _auth.hash_password(req.password),
+        "is_manager": False,
+    }).execute()
+    user = row.data[0]
+    token = _auth.create_token(user["id"], user["email"], user["is_manager"])
+    return {"token": token, "user": {"id": user["id"], "email": user["email"], "is_manager": user["is_manager"]}}
+
+
+@app.get("/auth/users")
+def list_users(_manager: dict = Depends(_require_manager)):
+    rows = (
+        supabase.table("users")
+        .select("id, email, is_manager, created_at")
+        .order("created_at", desc=False)
+        .execute()
+    )
+    return {"data": rows.data}
+
+
+@app.delete("/auth/users/{user_id}")
+def delete_user(user_id: str, manager: dict = Depends(_require_manager)):
+    if user_id == manager["sub"]:
+        raise HTTPException(status_code=400, detail="Cannot delete your own account")
+    supabase.table("users").delete().eq("id", user_id).execute()
+    return {"deleted": user_id}
+
+
+class ResetPasswordRequest(BaseModel):
+    email: str
+    new_password: str
+
+
+@app.post("/auth/reset-password")
+def reset_password(req: ResetPasswordRequest):
+    email = req.email.strip().lower()
+    rows = supabase.table("users").select("id, is_manager").eq("email", email).execute()
+    if not rows.data:
+        raise HTTPException(status_code=404, detail="No account found with this email address")
+    user = rows.data[0]
+    if user["is_manager"]:
+        raise HTTPException(status_code=403, detail="Manager password cannot be reset this way")
+    if len(req.new_password) < 6:
+        raise HTTPException(status_code=422, detail="Password must be at least 6 characters")
+    supabase.table("users").update(
+        {"password_hash": _auth.hash_password(req.new_password)}
+    ).eq("id", user["id"]).execute()
+    return {"reset": True}
 
 
 # ── 1. Policies list ──────────────────────────────────────────────────────────
@@ -390,10 +519,20 @@ def search(
 
 class ChatRequest(BaseModel):
     question: str
+    session_id: str | None = None
 
 
 @app.post("/chat")
-def chat(req: ChatRequest):
+def chat(req: ChatRequest, authorization: str | None = Header(default=None)):
+    # Optionally identify user for history saving (not required to use chat)
+    user_id: str | None = None
+    if authorization and authorization.startswith("Bearer "):
+        try:
+            payload = _auth.decode_token(authorization.split(" ", 1)[1])
+            user_id = payload["sub"]
+        except Exception:
+            pass
+
     articles = _fetch_context(req.question)
 
     context = "\n\n---\n\n".join(
@@ -412,13 +551,33 @@ def chat(req: ChatRequest):
         }],
     )
 
-    return {
-        "answer": msg.content[0].text,
-        "sources": [
-            {"title": a["title"], "url": a["url"], "source": a["source"]}
-            for a in articles
-        ],
-    }
+    answer = msg.content[0].text
+    sources = [{"title": a["title"], "url": a["url"], "source": a["source"]} for a in articles]
+
+    # Persist to chat_history if we have a logged-in user + session
+    if user_id and req.session_id:
+        try:
+            supabase.table("chat_history").insert([
+                {"user_id": user_id, "session_id": req.session_id, "role": "user", "content": req.question},
+                {"user_id": user_id, "session_id": req.session_id, "role": "assistant", "content": answer, "sources": sources},
+            ]).execute()
+        except Exception as exc:
+            logger.warning("Failed to save chat history: %s", exc)
+
+    return {"answer": answer, "sources": sources}
+
+
+@app.get("/chat/history")
+def get_chat_history(current_user: dict = Depends(_get_current_user)):
+    rows = (
+        supabase.table("chat_history")
+        .select("id, role, content, sources, created_at")
+        .eq("user_id", current_user["sub"])
+        .order("created_at", desc=False)
+        .limit(200)
+        .execute()
+    )
+    return {"data": rows.data}
 
 
 # ── 4. Translate ──────────────────────────────────────────────────────────────
@@ -543,7 +702,7 @@ def add_source(req: SourceRequest):
 
 
 @app.delete("/sources/{source_id}")
-def delete_source(source_id: str):
+def delete_source(source_id: str, _manager: dict = Depends(_require_manager)):
     supabase.table("custom_sources").delete().eq("id", source_id).execute()
     return {"deleted": source_id}
 

@@ -1,15 +1,21 @@
 import { useState } from 'react';
-import { FileText, MessageSquare, Search, Globe } from 'lucide-react';
+import { FileText, MessageSquare, Search, Globe, ShieldCheck, LogOut } from 'lucide-react';
 import { ArticlesTab } from './components/ArticlesTab';
 import { ChatbotTab } from './components/ChatbotTab';
 import { SearchTab } from './components/SearchTab';
 import { SourcesTab } from './components/SourcesTab';
+import { ManagerTab } from './components/ManagerTab';
+import { AuthPage } from './components/AuthPage';
+import { AuthProvider, useAuth } from './contexts/AuthContext';
 import logo from '../imports/logo.png';
 
-type TabType = 'articles' | 'chat' | 'search' | 'sources';
+type TabType = 'articles' | 'chat' | 'search' | 'sources' | 'manager';
 
-export default function App() {
+function AppContent() {
+  const { user, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<TabType>('articles');
+
+  if (!user) return <AuthPage />;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 to-gray-100">
@@ -18,13 +24,25 @@ export default function App() {
         <div className="max-w-7xl mx-auto px-6 py-6">
           <div className="flex items-center gap-4">
             <img src={logo} alt="iitel solutions" className="w-16 h-16 mix-blend-mode-multiply" style={{ mixBlendMode: 'multiply' }} />
-            <div>
+            <div className="flex-1">
               <h1 className="text-2xl font-semibold text-gray-900">
                 International Institute of Technology Education and Leadership
               </h1>
               <p className="text-sm text-gray-600">
                 Global Policy Tracker - Real-time regulatory monitoring
               </p>
+            </div>
+            {/* User + logout */}
+            <div className="flex items-center gap-3">
+              <span className="text-sm text-gray-500 hidden sm:block">{user.email}</span>
+              <button
+                onClick={logout}
+                title="Sign out"
+                className="flex items-center gap-1.5 px-3 py-2 text-sm text-gray-500 hover:text-gray-800 hover:bg-gray-100 rounded-lg transition-colors"
+              >
+                <LogOut className="w-4 h-4" />
+                <span className="hidden sm:block">Sign out</span>
+              </button>
             </div>
           </div>
         </div>
@@ -81,17 +99,43 @@ export default function App() {
               <Globe className="w-5 h-5" />
               <span className="font-medium">Sources</span>
             </button>
+
+            {/* Manager-only tab */}
+            {user.is_manager && (
+              <button
+                onClick={() => setActiveTab('manager')}
+                className={`flex items-center gap-2 px-6 py-4 border-b-2 transition-colors ${
+                  activeTab === 'manager'
+                    ? 'border-[#C9A961] text-[#C9A961]'
+                    : 'border-transparent text-gray-600 hover:text-gray-900'
+                }`}
+              >
+                <ShieldCheck className="w-5 h-5" />
+                <span className="font-medium">Manager</span>
+              </button>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Main Content */}
+      {/* Main Content — all tabs stay mounted to preserve state across navigation */}
       <main className="max-w-7xl mx-auto px-6 py-8">
-        {activeTab === 'articles' && <ArticlesTab />}
-        {activeTab === 'chat' && <ChatbotTab />}
-        {activeTab === 'search' && <SearchTab />}
-        {activeTab === 'sources' && <SourcesTab />}
+        <div className={activeTab !== 'articles' ? 'hidden' : ''}><ArticlesTab /></div>
+        <div className={activeTab !== 'chat' ? 'hidden' : ''}><ChatbotTab /></div>
+        <div className={activeTab !== 'search' ? 'hidden' : ''}><SearchTab /></div>
+        <div className={activeTab !== 'sources' ? 'hidden' : ''}><SourcesTab /></div>
+        {user.is_manager && (
+          <div className={activeTab !== 'manager' ? 'hidden' : ''}><ManagerTab /></div>
+        )}
       </main>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppContent />
+    </AuthProvider>
   );
 }

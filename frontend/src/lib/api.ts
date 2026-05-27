@@ -1,5 +1,16 @@
 const API_BASE = import.meta.env.VITE_API_URL ?? 'http://localhost:8000';
 
+// Module-level auth token — set by AuthContext after login
+let _authToken: string | null = null;
+
+export function setAuthToken(token: string | null) {
+  _authToken = token;
+}
+
+function authHeaders(): Record<string, string> {
+  return _authToken ? { Authorization: `Bearer ${_authToken}` } : {};
+}
+
 export interface Article {
   id: string;
   title: string;
@@ -185,12 +196,100 @@ export async function uploadPdf(file: File): Promise<PdfUploadResult> {
   return res.json();
 }
 
-export async function askChat(question: string): Promise<ChatResponse> {
+export async function askChat(question: string, sessionId?: string): Promise<ChatResponse> {
   const res = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question }),
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ question, session_id: sessionId }),
   });
   if (!res.ok) throw new Error('Failed to get chat response');
+  return res.json();
+}
+
+// ── Auth ──────────────────────────────────────────────────────────────────────
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  is_manager: boolean;
+}
+
+export interface AuthResponse {
+  token: string;
+  user: AuthUser;
+}
+
+export async function login(email: string, password: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/auth/login`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail ?? 'Login failed');
+  }
+  return res.json();
+}
+
+export async function signup(email: string, password: string): Promise<AuthResponse> {
+  const res = await fetch(`${API_BASE}/auth/signup`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, password }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail ?? 'Signup failed');
+  }
+  return res.json();
+}
+
+export interface AppUser {
+  id: string;
+  email: string;
+  is_manager: boolean;
+  created_at: string;
+}
+
+export async function resetPassword(email: string, newPassword: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/auth/reset-password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email, new_password: newPassword }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { detail?: string }).detail ?? 'Reset failed');
+  }
+}
+
+export async function fetchUsers(): Promise<{ data: AppUser[] }> {
+  const res = await fetch(`${API_BASE}/auth/users`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('Failed to fetch users');
+  return res.json();
+}
+
+export async function deleteUser(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/auth/users/${id}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to delete user');
+}
+
+// ── Chat history ──────────────────────────────────────────────────────────────
+
+export interface ChatHistoryMessage {
+  id: string;
+  role: 'user' | 'assistant';
+  content: string;
+  sources: ChatSource[] | null;
+  created_at: string;
+}
+
+export async function fetchChatHistory(): Promise<{ data: ChatHistoryMessage[] }> {
+  const res = await fetch(`${API_BASE}/chat/history`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('Failed to fetch chat history');
   return res.json();
 }
