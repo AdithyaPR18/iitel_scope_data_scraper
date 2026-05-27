@@ -38,6 +38,7 @@ export function SourcesTab() {
 
   const [url, setUrl] = useState('');
   const [label, setLabel] = useState('');
+  const [crawlMode, setCrawlMode] = useState<'crawl' | 'single'>('crawl');
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState<string | null>(null);
   const [addedId, setAddedId] = useState<string | null>(null);
@@ -68,9 +69,10 @@ export function SourcesTab() {
     setAddError(null);
     setAddedId(null);
     try {
-      await addSource(url.trim(), label.trim());
+      await addSource(url.trim(), label.trim(), crawlMode);
       setUrl('');
       setLabel('');
+      setCrawlMode('crawl');
       // Reload full list so new entry appears
       const res = await fetchAllSources();
       setSources(res.data);
@@ -152,8 +154,9 @@ export function SourcesTab() {
       <div>
         <h2 className="text-2xl mb-1">Source Manager</h2>
         <p className="text-sm text-gray-500">
-          Add new crawl targets or disable existing ones. Disabled sources are skipped on every
-          future crawl run. Custom sources crawl all content; built-in sources use keyword filters.
+          Add new sources or disable existing ones. Choose <strong>Crawler</strong> to follow links
+          across a site, or <strong>Single page</strong> to fetch only that exact URL.
+          Disabled sources are skipped on every crawl run.
         </p>
       </div>
 
@@ -195,6 +198,30 @@ export function SourcesTab() {
                 disabled={adding}
               />
             </div>
+          </div>
+
+          {/* Crawl mode selector */}
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1">Mode</label>
+            <div className="flex rounded-lg border border-gray-200 overflow-hidden text-sm w-fit">
+              {(['crawl', 'single'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  onClick={() => setCrawlMode(m)}
+                  className={`px-4 py-2 transition-colors ${
+                    crawlMode === m ? 'bg-[#C9A961] text-white' : 'text-gray-600 hover:bg-gray-50'
+                  }`}
+                >
+                  {m === 'crawl' ? 'Crawler' : 'Single page'}
+                </button>
+              ))}
+            </div>
+            <p className="text-xs text-gray-400 mt-1.5">
+              {crawlMode === 'crawl'
+                ? 'Follows links across the site — stores all pages it finds.'
+                : 'Fetches only this exact URL, no link-following.'}
+            </p>
           </div>
 
           {addError && (
@@ -347,9 +374,18 @@ export function SourcesTab() {
                 </div>
 
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-0.5">
+                  <div className="flex items-center gap-2 mb-0.5 flex-wrap">
                     <p className="font-medium text-gray-900 text-sm truncate">{source.label}</p>
                     {categoryBadge(source.category)}
+                    {source.source_type === 'custom' && (
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium whitespace-nowrap ${
+                        source.crawl_mode === 'single'
+                          ? 'bg-blue-50 text-blue-600'
+                          : 'bg-violet-50 text-violet-600'
+                      }`}>
+                        {source.crawl_mode === 'single' ? 'Single page' : 'Crawler'}
+                      </span>
+                    )}
                   </div>
                   <a
                     href={source.url}

@@ -722,6 +722,7 @@ def refresh_status():
 class SourceRequest(BaseModel):
     url: str
     label: str = ""
+    crawl_mode: str = "crawl"  # "crawl" | "single"
 
 
 class UrlRequest(BaseModel):
@@ -747,14 +748,14 @@ def list_all_sources():
 
     custom_rows = (
         supabase.table("custom_sources")
-        .select("id, url, label, added_at")
+        .select("id, url, label, crawl_mode, added_at")
         .order("added_at", desc=True)
         .execute()
     )
 
     result = []
 
-    # Built-in sources first
+    # Built-in sources first (always crawler mode)
     for s in _BUILTIN_SOURCES:
         result.append({
             "id": None,
@@ -762,6 +763,7 @@ def list_all_sources():
             "label": s["label"],
             "category": s.get("category", "Built-in"),
             "source_type": "builtin",
+            "crawl_mode": "crawl",
             "disabled": s["url"] in disabled_urls,
             "added_at": None,
         })
@@ -776,6 +778,7 @@ def list_all_sources():
                 "label": r["label"],
                 "category": "Custom",
                 "source_type": "custom",
+                "crawl_mode": r.get("crawl_mode") or "crawl",
                 "disabled": r["url"] in disabled_urls,
                 "added_at": r["added_at"],
             })
@@ -801,8 +804,9 @@ def add_source(req: SourceRequest):
     except ValueError:
         raise HTTPException(status_code=422, detail="Invalid URL")
 
+    crawl_mode = req.crawl_mode if req.crawl_mode in ("crawl", "single") else "crawl"
     label = req.label.strip() or urlparse(clean_url).netloc
-    row = supabase.table("custom_sources").insert({"url": clean_url, "label": label}).execute()
+    row = supabase.table("custom_sources").insert({"url": clean_url, "label": label, "crawl_mode": crawl_mode}).execute()
     return row.data[0]
 
 

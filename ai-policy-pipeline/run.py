@@ -25,8 +25,9 @@ import json
 import logging
 import sys
 
-from config import SOURCES, OUTPUT_DIR, OUTPUT_FILE
+from config import SOURCES, OUTPUT_DIR, OUTPUT_FILE, MIN_TEXT_LENGTH
 from pipeline import crawl_source
+from scrapers import fetch_page
 from database import upsert_pages, load_db
 from database.supabase_client import supabase
 
@@ -48,14 +49,34 @@ logger = logging.getLogger(__name__)
 def _load_custom_sources() -> list[dict]:
     """Fetch user-submitted sources from Supabase and convert to source dicts."""
     try:
-        rows = supabase.table("custom_sources").select("url, label").execute()
+        rows = supabase.table("custom_sources").select("url, label, crawl_mode").execute()
         return [
-            {"category": "Custom", "label": r["label"], "url": r["url"], "keywords": []}
+            {
+                "category": "Custom",
+                "label": r["label"],
+                "url": r["url"],
+                "keywords": [],
+                "crawl_mode": r.get("crawl_mode") or "crawl",
+            }
             for r in rows.data
         ]
     except Exception as exc:
         logger.warning("Could not load custom sources: %s", exc)
         return []
+
+
+def _fetch_single(source: dict) -> list[dict]:
+    """Fetch exactly one URL without following any links."""
+    page = fetch_page(source["url"])
+    if page is None or len(page.get("text", "")) < MIN_TEXT_LENGTH:
+        logger.info("  → 0 pages for [%s] (too short or failed to fetch)", source["label"])
+        return []
+    page["category"] = source["category"]
+    page["label"] = source["label"]
+    page["depth"] = 0
+    page.pop("links", None)
+    logger.info("  → 1 page stored for [%s]", source["label"])
+    return [page]
 
 
 def _load_disabled_urls() -> set[str]:
@@ -141,7 +162,10 @@ def main():
     for i, source in enumerate(sources, 1):
         logger.info("━━ [%d/%d] %s ━━", i, len(sources), source["label"])
         try:
-            pages = crawl_source(source)
+            if source.get("crawl_mode") == "single":
+                pages = _fetch_single(source)
+            else:
+                pages = crawl_source(source)
             if pages:
                 upsert_pages(pages)
                 total_pages += len(pages)

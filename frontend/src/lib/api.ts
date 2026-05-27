@@ -124,6 +124,7 @@ export interface CustomSource {
   id: string;
   url: string;
   label: string;
+  crawl_mode: 'crawl' | 'single';
   added_at: string;
 }
 
@@ -133,6 +134,7 @@ export interface SourceEntry {
   label: string;
   category: string;
   source_type: 'builtin' | 'custom';
+  crawl_mode: 'crawl' | 'single';
   disabled: boolean;
   added_at: string | null;
 }
@@ -143,11 +145,11 @@ export async function fetchAllSources(): Promise<{ data: SourceEntry[] }> {
   return res.json();
 }
 
-export async function addSource(url: string, label: string): Promise<CustomSource> {
+export async function addSource(url: string, label: string, crawlMode: 'crawl' | 'single' = 'crawl'): Promise<CustomSource> {
   const res = await fetch(`${API_BASE}/sources`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url, label }),
+    body: JSON.stringify({ url, label, crawl_mode: crawlMode }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
