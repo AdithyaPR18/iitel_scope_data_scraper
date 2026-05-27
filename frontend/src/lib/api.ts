@@ -196,14 +196,70 @@ export async function uploadPdf(file: File): Promise<PdfUploadResult> {
   return res.json();
 }
 
-export async function askChat(question: string, sessionId?: string): Promise<ChatResponse> {
+export interface HistoryMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export async function askChat(
+  question: string,
+  sessionId?: string,
+  history: HistoryMessage[] = [],
+): Promise<ChatResponse> {
   const res = await fetch(`${API_BASE}/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
-    body: JSON.stringify({ question, session_id: sessionId }),
+    body: JSON.stringify({ question, session_id: sessionId, history }),
   });
   if (!res.ok) throw new Error('Failed to get chat response');
   return res.json();
+}
+
+export async function streamChat(
+  question: string,
+  onDelta: (text: string) => void,
+  sessionId?: string,
+  history: HistoryMessage[] = [],
+): Promise<{ sources: ChatSource[] }> {
+  const res = await fetch(`${API_BASE}/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify({ question, session_id: sessionId, history }),
+  });
+  if (!res.ok) throw new Error('Failed to start chat stream');
+
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let sources: ChatSource[] = [];
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const parts = buffer.split('\n\n');
+    buffer = parts.pop() ?? '';
+
+    for (const part of parts) {
+      if (!part.startsWith('data: ')) continue;
+      const event = JSON.parse(part.slice(6)) as {
+        type: 'delta' | 'done' | 'error';
+        text?: string;
+        sources?: ChatSource[];
+        message?: string;
+      };
+      if (event.type === 'delta' && event.text) {
+        onDelta(event.text);
+      } else if (event.type === 'done' && event.sources) {
+        sources = event.sources;
+      } else if (event.type === 'error') {
+        throw new Error(event.message ?? 'Stream error');
+      }
+    }
+  }
+
+  return { sources };
 }
 
 // ── Auth ──────────────────────────────────────────────────────────────────────

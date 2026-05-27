@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import sys
@@ -14,6 +15,7 @@ import anthropic
 import pypdf
 from fastapi import FastAPI, Query, UploadFile, File, HTTPException, Depends, Header
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from langdetect import detect, LangDetectException, DetectorFactory
 DetectorFactory.seed = 0  # deterministic results
@@ -91,13 +93,30 @@ _STOPWORDS = {
     "please", "your", "their", "there", "been", "being", "some", "more",
 }
 
-SYSTEM_PROMPT = (
-    "You are an expert AI policy analyst. Answer questions about AI ethics policies, "
-    "regulations, and guidelines from around the world using only the policy documents "
-    "provided in the context below. When referencing a specific policy, cite the source "
-    "name and URL. If the provided documents don't contain enough information to answer "
-    "the question fully, say so clearly rather than speculating."
-)
+SYSTEM_PROMPT = """You are an intelligent research assistant, helping consultants stay sharp and up-to-date across the industries and domains they serve.
+
+You have access to a curated knowledge base of domain resources — articles, reports, updates, and reference materials — that has been embedded and retrieved for each conversation. Your job is to help consultants quickly understand what's happening in any given field, surface key changes and trends, and connect the dots across domains when relevant.
+
+## How you behave
+
+- **Be a knowledgeable peer, not a search engine.** Don't just recite what's in the documents — synthesize, contextualize, and explain why something matters. If a regulatory change just happened in healthcare, tell them what it means practically, not just what it says.
+- **Lead with the insight, not the source.** Answer first, then attribute where relevant. Consultants are busy — get to the point.
+- **Use plain, confident language.** No filler phrases like "Certainly!" or "Great question!" — just clear, direct answers that respect the reader's intelligence.
+- **Be honest about the edges of your knowledge.** If something isn't covered in the available resources, say so plainly: "I don't have information on that in the current knowledge base." Never speculate as fact.
+- **Flag when things are changing fast.** If a topic is evolving quickly or the available information may already be outdated, say so — recency awareness is part of the value.
+
+## Format guidance
+
+- For quick factual questions: short, direct answers — 2 to 4 sentences is usually right.
+- For "what's happening in X" questions: a brief summary followed by 2–4 key developments, each with a sentence or two of context.
+- For deep dives or comparisons: use clear headers and sections, but keep each section tight.
+- Never pad. If the answer is short, keep it short.
+
+## Boundaries
+
+- Stick to the information in the knowledge base. If asked something outside of it, acknowledge the gap rather than guessing.
+- Do not give legal, financial, or medical advice — frame insights as research context, not professional recommendations.
+- You represent a professional firm. Maintain that standard in every response."""
 
 
 # ── Auth helpers ──────────────────────────────────────────────────────────────
@@ -517,9 +536,15 @@ def search(
 
 # ── 3. Chat ───────────────────────────────────────────────────────────────────
 
+class HistoryMessage(BaseModel):
+    role: str   # "user" or "assistant"
+    content: str
+
+
 class ChatRequest(BaseModel):
     question: str
     session_id: str | None = None
+    history: list[HistoryMessage] = []
 
 
 @app.post("/chat")
@@ -540,15 +565,20 @@ def chat(req: ChatRequest, authorization: str | None = Header(default=None)):
         for a in articles
     )
 
+    # Build multi-turn message array: prior turns first, then the current question
+    # Cap at the last 20 messages (10 exchanges) to stay well within token limits
+    prior = [{"role": m.role, "content": m.content} for m in req.history[-20:]]
+    current = {
+        "role": "user",
+        "content": f"Relevant knowledge base documents:\n\n{context}\n\nQuestion: {req.question}",
+    }
+
     client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
     msg = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=1024,
         system=SYSTEM_PROMPT,
-        messages=[{
-            "role": "user",
-            "content": f"Policy documents:\n\n{context}\n\nQuestion: {req.question}",
-        }],
+        messages=[*prior, current],
     )
 
     answer = msg.content[0].text
@@ -565,6 +595,65 @@ def chat(req: ChatRequest, authorization: str | None = Header(default=None)):
             logger.warning("Failed to save chat history: %s", exc)
 
     return {"answer": answer, "sources": sources}
+
+
+@app.post("/chat/stream")
+def chat_stream(req: ChatRequest, authorization: str | None = Header(default=None)):
+    user_id: str | None = None
+    if authorization and authorization.startswith("Bearer "):
+        try:
+            payload = _auth.decode_token(authorization.split(" ", 1)[1])
+            user_id = payload["sub"]
+        except Exception:
+            pass
+
+    articles = _fetch_context(req.question)
+    context = "\n\n---\n\n".join(
+        f"Source: {a['source']}\nTitle: {a['title']}\nURL: {a['url']}\n\n{_fix_encoding(a.get('content') or '')[:3000]}"
+        for a in articles
+    )
+    sources = [{"title": a["title"], "url": a["url"], "source": a["source"]} for a in articles]
+
+    prior = [{"role": m.role, "content": m.content} for m in req.history[-20:]]
+    current = {
+        "role": "user",
+        "content": f"Relevant knowledge base documents:\n\n{context}\n\nQuestion: {req.question}",
+    }
+
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+    def generate():
+        full_answer = ""
+        try:
+            with client.messages.stream(
+                model="claude-sonnet-4-6",
+                max_tokens=1024,
+                system=SYSTEM_PROMPT,
+                messages=[*prior, current],
+            ) as stream:
+                for text in stream.text_stream:
+                    full_answer += text
+                    yield f"data: {json.dumps({'type': 'delta', 'text': text})}\n\n"
+        except Exception as exc:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+            return
+
+        if user_id and req.session_id:
+            try:
+                supabase.table("chat_history").insert([
+                    {"user_id": user_id, "session_id": req.session_id, "role": "user", "content": req.question},
+                    {"user_id": user_id, "session_id": req.session_id, "role": "assistant", "content": full_answer, "sources": sources},
+                ]).execute()
+            except Exception as exc:
+                logger.warning("Failed to save chat history: %s", exc)
+
+        yield f"data: {json.dumps({'type': 'done', 'sources': sources})}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @app.get("/chat/history")

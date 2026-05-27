@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
 import { Send, Bot, User, ExternalLink, RotateCcw, Download } from 'lucide-react';
-import { askChat, fetchChatHistory, type ChatSource } from '@/lib/api';
+import { streamChat, fetchChatHistory, type ChatSource, type HistoryMessage } from '@/lib/api';
 import { useAuth } from '@/app/contexts/AuthContext';
 
 interface Message {
@@ -114,6 +114,12 @@ export function ChatbotTab() {
     const question = input.trim();
     setInput('');
 
+    // Snapshot history BEFORE adding the new user message so we don't send
+    // the current question twice (once in history, once as the question param)
+    const historySnapshot: HistoryMessage[] = messages
+      .filter((m) => m.id !== 'welcome')
+      .map((m) => ({ role: m.role, content: m.content }));
+
     const userMessage: Message = {
       id: crypto.randomUUID(),
       role: 'user',
@@ -123,26 +129,38 @@ export function ChatbotTab() {
     setMessages((prev) => [...prev, userMessage]);
     setLoading(true);
 
+    // Add an empty assistant message immediately — we'll stream text into it
+    const assistantId = crypto.randomUUID();
+    setMessages((prev) => [
+      ...prev,
+      { id: assistantId, role: 'assistant', content: '', timestamp: new Date() },
+    ]);
+
     try {
-      const res = await askChat(question, user ? sessionId : undefined);
-      const aiMessage: Message = {
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: res.answer,
-        sources: res.sources,
-        timestamp: new Date(),
-      };
-      setMessages((prev) => [...prev, aiMessage]);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          id: crypto.randomUUID(),
-          role: 'assistant',
-          content: 'Sorry, I encountered an error. Please check that the backend is running and try again.',
-          timestamp: new Date(),
+      const { sources } = await streamChat(
+        question,
+        (delta) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === assistantId ? { ...m, content: m.content + delta } : m,
+            ),
+          );
         },
-      ]);
+        user ? sessionId : undefined,
+        historySnapshot,
+      );
+      // Attach sources once streaming is complete
+      setMessages((prev) =>
+        prev.map((m) => (m.id === assistantId ? { ...m, sources } : m)),
+      );
+    } catch {
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === assistantId
+            ? { ...m, content: 'Sorry, I encountered an error. Please check that the backend is running and try again.' }
+            : m,
+        ),
+      );
     } finally {
       setLoading(false);
     }
