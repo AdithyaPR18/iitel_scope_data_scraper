@@ -33,7 +33,7 @@ if _EMBEDDINGS_READY:
     from embeddings import embed_article, embed_pending_articles, search_chunks
 
 PIPELINE_DIR = os.path.normpath(
-    os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "ai-policy-pipeline")
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), "ai-policy-pipeline")
 )
 
 _refresh: dict = {"running": False, "started_at": None, "finished_at": None, "error": None}

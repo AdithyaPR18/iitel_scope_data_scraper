@@ -27,7 +27,7 @@ import logging
 import os
 from datetime import datetime, timezone
 from pathlib import Path
-from supabase_client import supabase
+from .supabase_client import supabase
 
 from config import OUTPUT_DIR, OUTPUT_FILE
 
