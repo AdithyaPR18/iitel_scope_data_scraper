@@ -367,11 +367,6 @@ def _ensure_manager():
                 "is_manager": True,
             }).execute()
             logger.info("Manager account created: %s", MANAGER_EMAIL)
-        else:
-            supabase.table("users").update({
-                "password_hash": _auth.hash_password(MANAGER_PASSWORD),
-            }).eq("email", MANAGER_EMAIL).execute()
-            logger.info("Manager password synced: %s", MANAGER_EMAIL)
     except Exception as exc:
         logger.warning("Could not verify/create manager account: %s", exc)
 
