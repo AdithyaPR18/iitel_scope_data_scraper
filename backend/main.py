@@ -512,6 +512,13 @@ def list_policies(page: int = 1, limit: int = Query(20, le=100)):
     }
 
 
+@app.delete("/policies/{article_id}")
+def delete_policy(article_id: str, _manager: dict = Depends(_require_manager)):
+    supabase.table("article_chunks").delete().eq("article_id", article_id).execute()
+    supabase.table("articles").delete().eq("id", article_id).execute()
+    return {"deleted": article_id}
+
+
 @app.get("/policies/{article_id}")
 def get_policy(article_id: str):
     row = (

@@ -1,14 +1,15 @@
 import { useEffect, useState, useRef } from 'react';
 import {
   FileText, ExternalLink, ChevronLeft, ChevronRight,
-  ArrowLeft, Globe, RefreshCw,
+  ArrowLeft, Globe, RefreshCw, Trash2,
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import {
   fetchPolicies, fetchPolicy, translateText,
-  triggerRefresh, getRefreshStatus,
+  triggerRefresh, getRefreshStatus, deleteArticle,
   type Article, type ArticleDetail,
 } from '@/lib/api';
+import { useAuth } from '@/app/contexts/AuthContext';
 
 const LANG_NAMES: Record<string, string> = {
   fr: 'French', de: 'German', es: 'Spanish', it: 'Italian', pt: 'Portuguese',
@@ -20,11 +21,13 @@ const LANG_NAMES: Record<string, string> = {
 const PAGE_SIZE = 20;
 
 export function ArticlesTab() {
+  const { user } = useAuth();
   const [articles, setArticles] = useState<Article[]>([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
 
   const [selected, setSelected] = useState<ArticleDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
@@ -116,6 +119,21 @@ export function ArticlesTab() {
       setTranslatedPreviews((prev) => ({ ...prev, [article.id]: res.translated }));
     } finally {
       setTranslatingId(null);
+    }
+  };
+
+  const handleDelete = async (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    if (!confirm('Remove this article from the knowledge base?')) return;
+    setDeletingId(id);
+    try {
+      await deleteArticle(id);
+      setArticles((prev) => prev.filter((a) => a.id !== id));
+      setTotal((t) => t - 1);
+    } catch {
+      setError('Failed to delete article. Please try again.');
+    } finally {
+      setDeletingId(null);
     }
   };
 
@@ -338,20 +356,33 @@ export function ArticlesTab() {
 
                   <div className="flex items-center justify-between mt-2">
                     <p className="text-xs text-[#C9A961]">Click to read full article →</p>
-                    {article.preview && article.language && article.language !== 'en' && (
-                      <button
-                        onClick={(e) => { e.stopPropagation(); translatePreview(article); }}
-                        disabled={translatingId === article.id}
-                        className="flex items-center gap-1 text-xs text-gray-500 hover:text-[#C9A961] disabled:opacity-50 transition-colors"
-                      >
-                        <Globe className="w-3 h-3" />
-                        {translatingId === article.id
-                          ? 'Translating…'
-                          : translatedPreviews[article.id]
-                          ? 'Show original'
-                          : 'Translate preview'}
-                      </button>
-                    )}
+                    <div className="flex items-center gap-3">
+                      {article.preview && article.language && article.language !== 'en' && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); translatePreview(article); }}
+                          disabled={translatingId === article.id}
+                          className="flex items-center gap-1 text-xs text-gray-500 hover:text-[#C9A961] disabled:opacity-50 transition-colors"
+                        >
+                          <Globe className="w-3 h-3" />
+                          {translatingId === article.id
+                            ? 'Translating…'
+                            : translatedPreviews[article.id]
+                            ? 'Show original'
+                            : 'Translate preview'}
+                        </button>
+                      )}
+                      {user?.is_manager && (
+                        <button
+                          onClick={(e) => handleDelete(e, article.id)}
+                          disabled={deletingId === article.id}
+                          title="Remove article"
+                          className="flex items-center gap-1 text-xs text-gray-400 hover:text-red-500 disabled:opacity-40 transition-colors"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                          {deletingId === article.id ? 'Removing…' : 'Remove'}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               </div>

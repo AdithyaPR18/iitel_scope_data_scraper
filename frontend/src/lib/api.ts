@@ -323,6 +323,14 @@ export async function resetPassword(email: string, newPassword: string): Promise
   }
 }
 
+export async function deleteArticle(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/policies/${id}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw new Error('Failed to delete article');
+}
+
 export async function fetchUsers(): Promise<{ data: AppUser[] }> {
   const res = await fetch(`${API_BASE}/auth/users`, { headers: authHeaders() });
   if (!res.ok) throw new Error('Failed to fetch users');
