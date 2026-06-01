@@ -20,7 +20,7 @@ const LANG_NAMES: Record<string, string> = {
 
 const PAGE_SIZE = 20;
 
-export function ArticlesTab() {
+export function ArticlesTab({ refreshKey = 0 }: { refreshKey?: number }) {
   const { user } = useAuth();
   const [articles, setArticles] = useState<Article[]>([]);
   const [total, setTotal] = useState(0);
@@ -52,7 +52,7 @@ export function ArticlesTab() {
       .finally(() => setLoading(false));
   };
 
-  useEffect(() => { loadArticles(); }, [page]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { loadArticles(); }, [page, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // check refresh status on mount so the button reflects an in-progress crawl
   useEffect(() => {

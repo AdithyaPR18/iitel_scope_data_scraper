@@ -14,6 +14,8 @@ type TabType = 'articles' | 'chat' | 'search' | 'sources' | 'manager';
 function AppContent() {
   const { user, logout } = useAuth();
   const [activeTab, setActiveTab] = useState<TabType>('articles');
+  const [articlesVersion, setArticlesVersion] = useState(0);
+  const signalArticlesChanged = () => setArticlesVersion((v) => v + 1);
 
   if (!user) return <AuthPage />;
 
@@ -120,10 +122,10 @@ function AppContent() {
 
       {/* Main Content — all tabs stay mounted to preserve state across navigation */}
       <main className="max-w-7xl mx-auto px-6 py-8">
-        <div className={activeTab !== 'articles' ? 'hidden' : ''}><ArticlesTab /></div>
+        <div className={activeTab !== 'articles' ? 'hidden' : ''}><ArticlesTab refreshKey={articlesVersion} /></div>
         <div className={activeTab !== 'chat' ? 'hidden' : ''}><ChatbotTab /></div>
         <div className={activeTab !== 'search' ? 'hidden' : ''}><SearchTab /></div>
-        <div className={activeTab !== 'sources' ? 'hidden' : ''}><SourcesTab /></div>
+        <div className={activeTab !== 'sources' ? 'hidden' : ''}><SourcesTab onArticlesChanged={signalArticlesChanged} /></div>
         {user.is_manager && (
           <div className={activeTab !== 'manager' ? 'hidden' : ''}><ManagerTab /></div>
         )}

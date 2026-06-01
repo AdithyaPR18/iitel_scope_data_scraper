@@ -26,7 +26,7 @@ function categoryBadge(category: string) {
   );
 }
 
-export function SourcesTab() {
+export function SourcesTab({ onArticlesChanged }: { onArticlesChanged?: () => void }) {
   const { user } = useAuth();
   const [sources, setSources] = useState<SourceEntry[]>([]);
   const [loading, setLoading] = useState(true);
@@ -88,6 +88,7 @@ export function SourcesTab() {
     setPendingUrl(source.url);
     try {
       await purgeSourceArticles(source.url);
+      onArticlesChanged?.();
     } catch {
       setError('Failed to remove articles. Please try again.');
     } finally {
@@ -98,14 +99,14 @@ export function SourcesTab() {
   const handleDelete = async (source: SourceEntry) => {
     if (!source.id) return;
     if (!window.confirm(`Remove "${source.label}" from your sources? This cannot be undone.`)) return;
-    setPendingUrl(source.url);
+    // Optimistic update — remove immediately so the UI feels instant
+    setSources((prev) => prev.filter((s) => s.url !== source.url));
     try {
       await deleteSource(source.id);
-      setSources((prev) => prev.filter((s) => s.url !== source.url));
+      onArticlesChanged?.();
     } catch {
       setError('Failed to remove source. Please try again.');
-    } finally {
-      setPendingUrl(null);
+      load(); // re-fetch to restore correct state on failure
     }
   };
 
@@ -369,12 +370,12 @@ export function SourcesTab() {
                   </a>
                 </div>
 
-                {/* Remove articles (manager only, all sources) */}
-                {user?.is_manager && (
+                {/* Built-in sources: remove articles only (source definition can't be deleted) */}
+                {user?.is_manager && source.source_type === 'builtin' && (
                   <button
                     onClick={() => handlePurge(source)}
                     disabled={isPending}
-                    title="Remove all articles from this source"
+                    title="Remove all crawled articles from this source"
                     className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs border border-gray-300 text-gray-500 hover:border-red-300 hover:text-red-600 hover:bg-red-50 disabled:opacity-40 transition-colors"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
@@ -382,12 +383,12 @@ export function SourcesTab() {
                   </button>
                 )}
 
-                {/* Delete source definition (custom sources, manager only) */}
+                {/* Custom sources: one button removes the source definition + its articles */}
                 {source.source_type === 'custom' && user?.is_manager && (
                   <button
                     onClick={() => handleDelete(source)}
                     disabled={isPending}
-                    title="Remove this source permanently"
+                    title="Remove this source and all its articles permanently"
                     className="p-1.5 text-gray-400 hover:text-red-500 disabled:opacity-40 transition-colors rounded"
                   >
                     <Trash2 className="w-4 h-4" />
