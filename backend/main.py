@@ -769,10 +769,7 @@ def _validate_url(url: str) -> str:
 
 @app.get("/sources/all")
 def list_all_sources():
-    """Return every source (built-in + custom) with disabled status."""
-    disabled_rows = supabase.table("disabled_sources").select("url").execute()
-    disabled_urls: set[str] = {r["url"] for r in disabled_rows.data}
-
+    """Return every source (built-in + custom)."""
     custom_rows = (
         supabase.table("custom_sources")
         .select("id, url, label, crawl_mode, added_at")
@@ -782,7 +779,6 @@ def list_all_sources():
 
     result = []
 
-    # Built-in sources first (always crawler mode)
     for s in _BUILTIN_SOURCES:
         result.append({
             "id": None,
@@ -791,11 +787,9 @@ def list_all_sources():
             "category": s.get("category", "Built-in"),
             "source_type": "builtin",
             "crawl_mode": "crawl",
-            "disabled": s["url"] in disabled_urls,
             "added_at": None,
         })
 
-    # Custom sources (skip any URL already in built-in list)
     builtin_urls = {s["url"] for s in _BUILTIN_SOURCES}
     for r in custom_rows.data:
         if r["url"] not in builtin_urls:
@@ -806,7 +800,6 @@ def list_all_sources():
                 "category": "Custom",
                 "source_type": "custom",
                 "crawl_mode": r.get("crawl_mode") or "crawl",
-                "disabled": r["url"] in disabled_urls,
                 "added_at": r["added_at"],
             })
 
@@ -839,20 +832,40 @@ def add_source(req: SourceRequest):
 
 @app.delete("/sources/{source_id}")
 def delete_source(source_id: str, _manager: dict = Depends(_require_manager)):
+    row = supabase.table("custom_sources").select("url").eq("id", source_id).execute()
+    if row.data:
+        parsed = urlparse(row.data[0]["url"])
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        article_rows = (
+            supabase.table("articles")
+            .select("id")
+            .like("url", f"{origin}%")
+            .execute()
+        )
+        article_ids = [r["id"] for r in article_rows.data]
+        if article_ids:
+            supabase.table("article_chunks").delete().in_("article_id", article_ids).execute()
+            supabase.table("articles").delete().in_("id", article_ids).execute()
     supabase.table("custom_sources").delete().eq("id", source_id).execute()
     return {"deleted": source_id}
 
 
-@app.post("/sources/disable")
-def disable_source(req: UrlRequest):
-    supabase.table("disabled_sources").upsert({"url": req.url}).execute()
-    return {"disabled": req.url}
-
-
-@app.post("/sources/enable")
-def enable_source(req: UrlRequest):
-    supabase.table("disabled_sources").delete().eq("url", req.url).execute()
-    return {"enabled": req.url}
+@app.post("/sources/purge")
+def purge_source_articles(req: UrlRequest, _manager: dict = Depends(_require_manager)):
+    """Delete all articles (and chunks) crawled from a source's domain."""
+    parsed = urlparse(req.url)
+    origin = f"{parsed.scheme}://{parsed.netloc}"
+    article_rows = (
+        supabase.table("articles")
+        .select("id")
+        .like("url", f"{origin}%")
+        .execute()
+    )
+    article_ids = [r["id"] for r in article_rows.data]
+    if article_ids:
+        supabase.table("article_chunks").delete().in_("article_id", article_ids).execute()
+        supabase.table("articles").delete().in_("id", article_ids).execute()
+    return {"purged": req.url, "articles_removed": len(article_ids)}
 
 
 # ── 7. PDF upload ─────────────────────────────────────────────────────────────

@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
-import { Plus, Trash2, Link, AlertCircle, CheckCircle, Search, EyeOff, Eye, FileUp, FileText } from 'lucide-react';
+import { Plus, Trash2, Link, AlertCircle, CheckCircle, Search, FileUp, FileText } from 'lucide-react';
 import {
-  fetchAllSources, addSource, deleteSource, disableSource, enableSource, uploadPdf,
+  fetchAllSources, addSource, deleteSource, purgeSourceArticles, uploadPdf,
   type SourceEntry,
 } from '@/lib/api';
 import { useAuth } from '@/app/contexts/AuthContext';
@@ -34,7 +34,6 @@ export function SourcesTab() {
 
   const [search, setSearch] = useState('');
   const [filterType, setFilterType] = useState<'all' | 'builtin' | 'custom'>('all');
-  const [filterStatus, setFilterStatus] = useState<'all' | 'enabled' | 'disabled'>('all');
 
   const [url, setUrl] = useState('');
   const [label, setLabel] = useState('');
@@ -62,8 +61,7 @@ export function SourcesTab() {
 
   useEffect(() => { load(); }, []);
 
-  const handleAdd = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const handleAdd = async () => {
     if (!url.trim()) return;
     setAdding(true);
     setAddError(null);
@@ -73,7 +71,6 @@ export function SourcesTab() {
       setUrl('');
       setLabel('');
       setCrawlMode('crawl');
-      // Reload full list so new entry appears
       const res = await fetchAllSources();
       setSources(res.data);
       const added = res.data.find((s) => s.source_type === 'custom' && s.url.includes(url.trim().replace(/^https?:\/\//, '')));
@@ -86,19 +83,13 @@ export function SourcesTab() {
     }
   };
 
-  const handleToggle = async (source: SourceEntry) => {
+  const handlePurge = async (source: SourceEntry) => {
+    if (!window.confirm(`Remove all articles from "${source.label}"? This cannot be undone.`)) return;
     setPendingUrl(source.url);
     try {
-      if (source.disabled) {
-        await enableSource(source.url);
-      } else {
-        await disableSource(source.url);
-      }
-      setSources((prev) =>
-        prev.map((s) => s.url === source.url ? { ...s, disabled: !s.disabled } : s)
-      );
+      await purgeSourceArticles(source.url);
     } catch {
-      setError('Failed to update source status. Please try again.');
+      setError('Failed to remove articles. Please try again.');
     } finally {
       setPendingUrl(null);
     }
@@ -106,6 +97,7 @@ export function SourcesTab() {
 
   const handleDelete = async (source: SourceEntry) => {
     if (!source.id) return;
+    if (!window.confirm(`Remove "${source.label}" from your sources? This cannot be undone.`)) return;
     setPendingUrl(source.url);
     try {
       await deleteSource(source.id);
@@ -139,40 +131,32 @@ export function SourcesTab() {
     const q = search.toLowerCase();
     return sources.filter((s) => {
       if (filterType !== 'all' && s.source_type !== filterType) return false;
-      if (filterStatus === 'enabled' && s.disabled) return false;
-      if (filterStatus === 'disabled' && !s.disabled) return false;
       if (q && !s.label.toLowerCase().includes(q) && !s.url.toLowerCase().includes(q)) return false;
       return true;
     });
-  }, [sources, search, filterType, filterStatus]);
-
-  const enabledCount = sources.filter((s) => !s.disabled).length;
-  const disabledCount = sources.filter((s) => s.disabled).length;
+  }, [sources, search, filterType]);
 
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-2xl mb-1">Source Manager</h2>
         <p className="text-sm text-gray-500">
-          Add new sources or disable existing ones. Choose <strong>Crawler</strong> to follow links
+          Add new sources or remove existing ones. Choose <strong>Crawler</strong> to follow links
           across a site, or <strong>Single page</strong> to fetch only that exact URL.
-          Disabled sources are skipped on every crawl run.
         </p>
       </div>
 
       {/* Stats row */}
       {!loading && (
         <div className="flex gap-4 text-sm">
-          <span className="text-gray-600">{sources.length} total</span>
-          <span className="text-green-600">{enabledCount} enabled</span>
-          {disabledCount > 0 && <span className="text-gray-400">{disabledCount} disabled</span>}
+          <span className="text-gray-600">{sources.length} total sources</span>
         </div>
       )}
 
       {/* Add form */}
       <div className="border border-gray-200 rounded-lg p-6 bg-white">
         <h3 className="font-semibold text-gray-900 mb-4">Add a new source</h3>
-        <form onSubmit={handleAdd} className="space-y-3">
+        <form onSubmit={(e) => { e.preventDefault(); void handleAdd(); }} className="space-y-3">
           <div className="flex gap-3">
             <div className="flex-1">
               <label className="block text-xs font-medium text-gray-600 mb-1">URL *</label>
@@ -326,19 +310,6 @@ export function SourcesTab() {
             </button>
           ))}
         </div>
-        <div className="flex rounded-lg border border-gray-300 overflow-hidden text-sm">
-          {(['all', 'enabled', 'disabled'] as const).map((s) => (
-            <button
-              key={s}
-              onClick={() => setFilterStatus(s)}
-              className={`px-3 py-2 capitalize transition-colors ${
-                filterStatus === s ? 'bg-[#C9A961] text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
-              }`}
-            >
-              {s === 'all' ? 'All status' : s}
-            </button>
-          ))}
-        </div>
       </div>
 
       {error && (
@@ -365,9 +336,9 @@ export function SourcesTab() {
             return (
               <div
                 key={source.url}
-                className={`flex items-center gap-4 border rounded-lg px-5 py-3.5 bg-white transition-opacity ${
-                  source.disabled ? 'opacity-50' : ''
-                } ${source.id === addedId ? 'border-green-300 bg-green-50' : 'border-gray-200'}`}
+                className={`flex items-center gap-4 border rounded-lg px-5 py-3.5 bg-white ${
+                  source.id === addedId ? 'border-green-300 bg-green-50' : 'border-gray-200'
+                }`}
               >
                 <div className="p-2 bg-[#C9A961]/10 rounded-lg flex-shrink-0">
                   <Link className="w-4 h-4 text-[#C9A961]" />
@@ -398,31 +369,25 @@ export function SourcesTab() {
                   </a>
                 </div>
 
-                {source.disabled && (
-                  <span className="text-xs text-gray-400 whitespace-nowrap">Disabled</span>
+                {/* Remove articles (manager only, all sources) */}
+                {user?.is_manager && (
+                  <button
+                    onClick={() => handlePurge(source)}
+                    disabled={isPending}
+                    title="Remove all articles from this source"
+                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs border border-gray-300 text-gray-500 hover:border-red-300 hover:text-red-600 hover:bg-red-50 disabled:opacity-40 transition-colors"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    {isPending ? 'Removing…' : 'Remove articles'}
+                  </button>
                 )}
 
-                {/* Disable / enable toggle */}
-                <button
-                  onClick={() => handleToggle(source)}
-                  disabled={isPending}
-                  title={source.disabled ? 'Enable source' : 'Disable source'}
-                  className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs border transition-colors disabled:opacity-40 ${
-                    source.disabled
-                      ? 'border-green-300 text-green-600 hover:bg-green-50'
-                      : 'border-gray-300 text-gray-500 hover:bg-gray-50 hover:text-gray-700'
-                  }`}
-                >
-                  {source.disabled ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
-                  {isPending ? '…' : source.disabled ? 'Enable' : 'Disable'}
-                </button>
-
-                {/* Delete (custom sources, manager only) */}
+                {/* Delete source definition (custom sources, manager only) */}
                 {source.source_type === 'custom' && user?.is_manager && (
                   <button
                     onClick={() => handleDelete(source)}
                     disabled={isPending}
-                    title="Remove source permanently"
+                    title="Remove this source permanently"
                     className="p-1.5 text-gray-400 hover:text-red-500 disabled:opacity-40 transition-colors rounded"
                   >
                     <Trash2 className="w-4 h-4" />

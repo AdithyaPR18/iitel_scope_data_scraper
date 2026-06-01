@@ -135,7 +135,6 @@ export interface SourceEntry {
   category: string;
   source_type: 'builtin' | 'custom';
   crawl_mode: 'crawl' | 'single';
-  disabled: boolean;
   added_at: string | null;
 }
 
@@ -163,22 +162,14 @@ export async function deleteSource(id: string): Promise<void> {
   if (!res.ok) throw new Error('Failed to delete source');
 }
 
-export async function disableSource(url: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/sources/disable`, {
+export async function purgeSourceArticles(url: string): Promise<{ purged: string; articles_removed: number }> {
+  const res = await fetch(`${API_BASE}/sources/purge`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ url }),
   });
-  if (!res.ok) throw new Error('Failed to disable source');
-}
-
-export async function enableSource(url: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/sources/enable`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ url }),
-  });
-  if (!res.ok) throw new Error('Failed to enable source');
+  if (!res.ok) throw new Error('Failed to remove source articles');
+  return res.json();
 }
 
 export interface PdfUploadResult {
