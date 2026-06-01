@@ -769,7 +769,10 @@ def _validate_url(url: str) -> str:
 
 @app.get("/sources/all")
 def list_all_sources():
-    """Return every source (built-in + custom)."""
+    """Return every source (built-in + custom), excluding permanently removed ones."""
+    removed_rows = supabase.table("removed_sources").select("url").execute()
+    removed_urls: set[str] = {r["url"] for r in removed_rows.data}
+
     custom_rows = (
         supabase.table("custom_sources")
         .select("id, url, label, crawl_mode, added_at")
@@ -780,19 +783,20 @@ def list_all_sources():
     result = []
 
     for s in _BUILTIN_SOURCES:
-        result.append({
-            "id": None,
-            "url": s["url"],
-            "label": s["label"],
-            "category": s.get("category", "Built-in"),
-            "source_type": "builtin",
-            "crawl_mode": "crawl",
-            "added_at": None,
-        })
+        if s["url"] not in removed_urls:
+            result.append({
+                "id": None,
+                "url": s["url"],
+                "label": s["label"],
+                "category": s.get("category", "Built-in"),
+                "source_type": "builtin",
+                "crawl_mode": "crawl",
+                "added_at": None,
+            })
 
     builtin_urls = {s["url"] for s in _BUILTIN_SOURCES}
     for r in custom_rows.data:
-        if r["url"] not in builtin_urls:
+        if r["url"] not in builtin_urls and r["url"] not in removed_urls:
             result.append({
                 "id": r["id"],
                 "url": r["url"],
@@ -850,9 +854,9 @@ def delete_source(source_id: str, _manager: dict = Depends(_require_manager)):
     return {"deleted": source_id}
 
 
-@app.post("/sources/purge")
-def purge_source_articles(req: UrlRequest, _manager: dict = Depends(_require_manager)):
-    """Delete all articles (and chunks) crawled from a source's domain."""
+@app.post("/sources/remove")
+def remove_source(req: UrlRequest, _manager: dict = Depends(_require_manager)):
+    """Permanently remove a source and all its articles (works for built-in and custom)."""
     parsed = urlparse(req.url)
     origin = f"{parsed.scheme}://{parsed.netloc}"
     article_rows = (
@@ -865,7 +869,9 @@ def purge_source_articles(req: UrlRequest, _manager: dict = Depends(_require_man
     if article_ids:
         supabase.table("article_chunks").delete().in_("article_id", article_ids).execute()
         supabase.table("articles").delete().in_("id", article_ids).execute()
-    return {"purged": req.url, "articles_removed": len(article_ids)}
+    supabase.table("custom_sources").delete().eq("url", req.url).execute()
+    supabase.table("removed_sources").upsert({"url": req.url}).execute()
+    return {"removed": req.url, "articles_deleted": len(article_ids)}
 
 
 # ── 7. PDF upload ─────────────────────────────────────────────────────────────

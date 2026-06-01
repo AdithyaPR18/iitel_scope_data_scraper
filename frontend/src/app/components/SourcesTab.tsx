@@ -1,7 +1,7 @@
 import { useEffect, useState, useMemo, useRef } from 'react';
 import { Plus, Trash2, Link, AlertCircle, CheckCircle, Search, FileUp, FileText } from 'lucide-react';
 import {
-  fetchAllSources, addSource, deleteSource, purgeSourceArticles, uploadPdf,
+  fetchAllSources, addSource, removeSource, uploadPdf,
   type SourceEntry,
 } from '@/lib/api';
 import { useAuth } from '@/app/contexts/AuthContext';
@@ -42,7 +42,6 @@ export function SourcesTab({ onArticlesChanged }: { onArticlesChanged?: () => vo
   const [addError, setAddError] = useState<string | null>(null);
   const [addedId, setAddedId] = useState<string | null>(null);
 
-  const [pendingUrl, setPendingUrl] = useState<string | null>(null);
 
   // PDF upload state
   const [pdfDragging, setPdfDragging] = useState(false);
@@ -83,30 +82,15 @@ export function SourcesTab({ onArticlesChanged }: { onArticlesChanged?: () => vo
     }
   };
 
-  const handlePurge = async (source: SourceEntry) => {
-    if (!window.confirm(`Remove all articles from "${source.label}"? This cannot be undone.`)) return;
-    setPendingUrl(source.url);
-    try {
-      await purgeSourceArticles(source.url);
-      onArticlesChanged?.();
-    } catch {
-      setError('Failed to remove articles. Please try again.');
-    } finally {
-      setPendingUrl(null);
-    }
-  };
-
-  const handleDelete = async (source: SourceEntry) => {
-    if (!source.id) return;
-    if (!window.confirm(`Remove "${source.label}" from your sources? This cannot be undone.`)) return;
-    // Optimistic update — remove immediately so the UI feels instant
+  const handleRemove = async (source: SourceEntry) => {
+    if (!window.confirm(`Remove "${source.label}" and all its articles? This cannot be undone.`)) return;
     setSources((prev) => prev.filter((s) => s.url !== source.url));
     try {
-      await deleteSource(source.id);
+      await removeSource(source.url);
       onArticlesChanged?.();
     } catch {
       setError('Failed to remove source. Please try again.');
-      load(); // re-fetch to restore correct state on failure
+      load();
     }
   };
 
@@ -332,71 +316,53 @@ export function SourcesTab({ onArticlesChanged }: { onArticlesChanged?: () => vo
         </div>
       ) : (
         <div className="space-y-1.5">
-          {filtered.map((source) => {
-            const isPending = pendingUrl === source.url;
-            return (
-              <div
-                key={source.url}
-                className={`flex items-center gap-4 border rounded-lg px-5 py-3.5 bg-white ${
-                  source.id === addedId ? 'border-green-300 bg-green-50' : 'border-gray-200'
-                }`}
-              >
-                <div className="p-2 bg-[#C9A961]/10 rounded-lg flex-shrink-0">
-                  <Link className="w-4 h-4 text-[#C9A961]" />
-                </div>
-
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 mb-0.5 flex-wrap">
-                    <p className="font-medium text-gray-900 text-sm truncate">{source.label}</p>
-                    {categoryBadge(source.category)}
-                    {source.source_type === 'custom' && (
-                      <span className={`px-2 py-0.5 rounded text-xs font-medium whitespace-nowrap ${
-                        source.crawl_mode === 'single'
-                          ? 'bg-blue-50 text-blue-600'
-                          : 'bg-violet-50 text-violet-600'
-                      }`}>
-                        {source.crawl_mode === 'single' ? 'Single page' : 'Crawler'}
-                      </span>
-                    )}
-                  </div>
-                  <a
-                    href={source.url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="text-xs text-[#C9A961] hover:underline truncate block"
-                    onClick={(e) => e.stopPropagation()}
-                  >
-                    {source.url}
-                  </a>
-                </div>
-
-                {/* Built-in sources: remove articles only (source definition can't be deleted) */}
-                {user?.is_manager && source.source_type === 'builtin' && (
-                  <button
-                    onClick={() => handlePurge(source)}
-                    disabled={isPending}
-                    title="Remove all crawled articles from this source"
-                    className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs border border-gray-300 text-gray-500 hover:border-red-300 hover:text-red-600 hover:bg-red-50 disabled:opacity-40 transition-colors"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                    {isPending ? 'Removing…' : 'Remove articles'}
-                  </button>
-                )}
-
-                {/* Custom sources: one button removes the source definition + its articles */}
-                {source.source_type === 'custom' && user?.is_manager && (
-                  <button
-                    onClick={() => handleDelete(source)}
-                    disabled={isPending}
-                    title="Remove this source and all its articles permanently"
-                    className="p-1.5 text-gray-400 hover:text-red-500 disabled:opacity-40 transition-colors rounded"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
-                )}
+          {filtered.map((source) => (
+            <div
+              key={source.url}
+              className={`flex items-center gap-4 border rounded-lg px-5 py-3.5 bg-white ${
+                source.id === addedId ? 'border-green-300 bg-green-50' : 'border-gray-200'
+              }`}
+            >
+              <div className="p-2 bg-[#C9A961]/10 rounded-lg flex-shrink-0">
+                <Link className="w-4 h-4 text-[#C9A961]" />
               </div>
-            );
-          })}
+
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-0.5 flex-wrap">
+                  <p className="font-medium text-gray-900 text-sm truncate">{source.label}</p>
+                  {categoryBadge(source.category)}
+                  {source.source_type === 'custom' && (
+                    <span className={`px-2 py-0.5 rounded text-xs font-medium whitespace-nowrap ${
+                      source.crawl_mode === 'single'
+                        ? 'bg-blue-50 text-blue-600'
+                        : 'bg-violet-50 text-violet-600'
+                    }`}>
+                      {source.crawl_mode === 'single' ? 'Single page' : 'Crawler'}
+                    </span>
+                  )}
+                </div>
+                <a
+                  href={source.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-[#C9A961] hover:underline truncate block"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  {source.url}
+                </a>
+              </div>
+
+              {user?.is_manager && (
+                <button
+                  onClick={() => handleRemove(source)}
+                  title="Remove this source and all its articles permanently"
+                  className="p-1.5 text-gray-400 hover:text-red-500 transition-colors rounded"
+                >
+                  <Trash2 className="w-4 h-4" />
+                </button>
+              )}
+            </div>
+          ))}
         </div>
       )}
     </div>

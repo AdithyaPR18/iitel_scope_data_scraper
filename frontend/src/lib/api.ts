@@ -162,14 +162,13 @@ export async function deleteSource(id: string): Promise<void> {
   if (!res.ok) throw new Error('Failed to delete source');
 }
 
-export async function purgeSourceArticles(url: string): Promise<{ purged: string; articles_removed: number }> {
-  const res = await fetch(`${API_BASE}/sources/purge`, {
+export async function removeSource(url: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/sources/remove`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', ...authHeaders() },
     body: JSON.stringify({ url }),
   });
-  if (!res.ok) throw new Error('Failed to remove source articles');
-  return res.json();
+  if (!res.ok) throw new Error('Failed to remove source');
 }
 
 export interface PdfUploadResult {
