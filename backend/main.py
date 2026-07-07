@@ -74,6 +74,8 @@ app = FastAPI(title="AI Policy API", version="1.0.0", docs_url=None, redoc_url=N
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000",
         "https://iitel-review-front.onrender.com",
         "https://engine.theiitelreview.com",
     ],
@@ -682,6 +684,7 @@ def chat_stream(req: ChatRequest, authorization: str | None = Header(default=Non
                     full_answer += text
                     yield f"data: {json.dumps({'type': 'delta', 'text': text})}\n\n"
         except Exception as exc:
+            logger.error("Anthropic stream error: %s", exc, exc_info=True)
             yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
             return
 
