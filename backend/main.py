@@ -73,8 +73,12 @@ app = FastAPI(title="AI Policy API", version="1.0.0", docs_url=None, redoc_url=N
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # tighten to your frontend URL before going to production
-    allow_methods=["GET", "POST", "DELETE"],
+    allow_origins=[
+        "https://iitel-review-front.onrender.com",
+        "https://engine.theiitelreview.com",
+    ],
+    allow_credentials=True,
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
